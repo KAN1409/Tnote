@@ -1,0 +1,7 @@
+{
+  "name": "Voice Notes",
+  "description": "Free voice-to-text note-taking application with speech recognition, text notes, URL capture, and on-device image OCR.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
