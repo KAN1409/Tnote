@@ -168,17 +168,18 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 emitFeedback(result.errorMessage ?: "Voice recording could not be saved", isError = true)
                 return@launch
             }
-            val insight = CaptureIntelligence.analyze(result.transcribedText, NoteType.VOICE)
-            val noteTitle = title.trim().ifBlank { insight.title }
+            val usableTranscript = result.transcribedText.trim()
+            val insight = if (usableTranscript.length >= 12) CaptureIntelligence.analyze(usableTranscript, NoteType.VOICE) else null
+            val noteTitle = title.trim().ifBlank { insight?.title ?: "Voice Note" }
             val note = NoteEntity(
                 type = NoteType.VOICE,
                 title = noteTitle,
-                content = result.transcribedText,
+                content = usableTranscript,
                 audioFilePath = audioPath,
                 durationSeconds = result.durationSeconds,
-                tags = insight.tags,
-                summary = insight.summary,
-                category = insight.category
+                tags = insight?.tags.orEmpty(),
+                summary = insight?.summary.orEmpty(),
+                category = insight?.category.orEmpty()
             )
             repository.insertNote(note)
             _isRecordingSheetVisible.value = false
@@ -244,16 +245,17 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveOcrNote(title: String, extractedText: String, imagePath: String?) {
         viewModelScope.launch {
-            val insight = CaptureIntelligence.analyze(extractedText, NoteType.OCR)
-            val noteTitle = title.trim().ifBlank { insight.title }
+            val usableText = extractedText.trim()
+            val insight = if (usableText.length >= 12) CaptureIntelligence.analyze(usableText, NoteType.OCR) else null
+            val noteTitle = title.trim().ifBlank { insight?.title ?: "Image OCR" }
             val note = NoteEntity(
                 type = NoteType.OCR,
                 title = noteTitle,
-                content = extractedText,
+                content = usableText,
                 imageUri = imagePath,
-                tags = insight.tags,
-                summary = insight.summary,
-                category = insight.category
+                tags = insight?.tags.orEmpty(),
+                summary = insight?.summary.orEmpty(),
+                category = insight?.category.orEmpty()
             )
             repository.insertNote(note)
             _isOcrSheetVisible.value = false
