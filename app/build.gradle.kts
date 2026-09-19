@@ -49,6 +49,9 @@ android {
   androidResources {
     noCompress += listOf("onnx", "traineddata")
   }
+  packaging {
+    jniLibs.pickFirsts += "lib/arm64-v8a/libonnxruntime.so"
+  }
   testOptions {
     unitTests {
       isIncludeAndroidResources = true
