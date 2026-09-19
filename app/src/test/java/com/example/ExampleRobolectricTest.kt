@@ -7,6 +7,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.model.NoteEntity
 import com.example.data.model.NoteType
 import com.example.service.models.ModelManager
+import com.example.service.speech.OfflineTranscriber
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -81,6 +82,32 @@ class ExampleRobolectricTest {
     assertEquals(true, ModelManager.VOICE_TINY in manager.state.value.installedIds)
     assertEquals(true, ModelManager.OCR_FAST in manager.state.value.installedIds)
     assertEquals(true, manager.activate(ModelManager.VOICE_BASE).isFailure)
+    assertEquals(true, manager.activate(ModelManager.VOICE_SMALL).isFailure)
     assertEquals(true, manager.activate(ModelManager.OCR_BEST).isFailure)
+  }
+
+  @Test
+  fun `repeated whisper hallucination is rejected`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val transcriber = OfflineTranscriber(context, ModelManager(context))
+
+    assertEquals(true, transcriber.isRepetitionHallucination("نحن نحن نحن نحن نحن نحن"))
+    assertEquals(
+      false,
+      transcriber.isRepetitionHallucination("ده اختبار جديد للترجمة This is a new transcription test")
+    )
+  }
+
+  @Test
+  fun `silence splitter preserves two spoken phrases`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val transcriber = OfflineTranscriber(context, ModelManager(context))
+    val sampleRate = 16_000
+    val phrase = FloatArray(sampleRate) { index -> if (index % 20 < 10) 0.2f else -0.2f }
+    val silence = FloatArray(sampleRate)
+    val recording = phrase + silence + phrase
+
+    assertEquals(2, transcriber.splitOnSilence(recording, sampleRate).size)
+    assertEquals(0, transcriber.splitOnSilence(silence, sampleRate).size)
   }
 }

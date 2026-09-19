@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.sqrt
 
 /** Whisper Tiny multilingual INT8 running fully on-device. Audio and transcripts never leave the phone. */
 class OfflineTranscriber(
@@ -35,14 +36,23 @@ class OfflineTranscriber(
                     recognizer = it
                     recognizerModelName = selectedModel
                 }
-                val stream = engine.createStream()
-                try {
-                    stream.acceptWaveform(wave.samples, wave.sampleRate)
-                    engine.decode(stream)
-                    engine.getResult(stream).text.trim()
-                } finally {
-                    stream.release()
-                }.also { require(it.isNotBlank()) { "No speech could be recognized." } }
+                val segments = splitOnSilence(wave.samples, wave.sampleRate)
+                require(segments.isNotEmpty()) { "No clear speech was detected in the recording." }
+                segments.mapNotNull { samples ->
+                    val stream = engine.createStream()
+                    try {
+                        stream.acceptWaveform(samples, wave.sampleRate)
+                        engine.decode(stream)
+                        engine.getResult(stream).text.trim().takeIf(String::isNotBlank)
+                    } finally {
+                        stream.release()
+                    }
+                }.joinToString(" ").trim().also { transcript ->
+                    require(transcript.isNotBlank()) { "No speech could be recognized." }
+                    require(!isRepetitionHallucination(transcript)) {
+                        "Whisper produced a repeated-word hallucination. Try again closer to the microphone."
+                    }
+                }
             }
         }
     }
@@ -70,7 +80,7 @@ class OfflineTranscriber(
                 decoder = decoder.absolutePath,
                 language = "",
                 task = "transcribe",
-                tailPaddings = 1000
+                tailPaddings = 300
             ),
             tokens = tokens.absolutePath,
             numThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6),
@@ -82,6 +92,56 @@ class OfflineTranscriber(
                 modelConfig = model
             )
         )
+    }
+
+    /** Trims silence and creates separate language-detection opportunities around real pauses. */
+    internal fun splitOnSilence(samples: FloatArray, sampleRate: Int): List<FloatArray> {
+        if (samples.isEmpty() || sampleRate <= 0) return emptyList()
+        val frameSize = (sampleRate / 50).coerceAtLeast(1) // 20 ms
+        val frameRms = samples.asList().chunked(frameSize).map { frame ->
+            sqrt(frame.sumOf { it.toDouble() * it } / frame.size.coerceAtLeast(1)).toFloat()
+        }
+        val peak = frameRms.maxOrNull() ?: 0f
+        val threshold = maxOf(0.006f, peak * 0.08f)
+        if (peak < threshold) return emptyList()
+        val maxSilentFrames = 22 // 440 ms
+        val paddingFrames = 10 // 200 ms
+        val minimumSpeechFrames = 18 // 360 ms
+        val ranges = mutableListOf<IntRange>()
+        var startFrame = -1
+        var lastSpeechFrame = -1
+        frameRms.forEachIndexed { index, rms ->
+            if (rms >= threshold) {
+                if (startFrame < 0) startFrame = index
+                lastSpeechFrame = index
+            } else if (startFrame >= 0 && index - lastSpeechFrame > maxSilentFrames) {
+                if (lastSpeechFrame - startFrame + 1 >= minimumSpeechFrames) {
+                    ranges += (startFrame - paddingFrames).coerceAtLeast(0)..(lastSpeechFrame + paddingFrames).coerceAtMost(frameRms.lastIndex)
+                }
+                startFrame = -1
+                lastSpeechFrame = -1
+            }
+        }
+        if (startFrame >= 0 && lastSpeechFrame - startFrame + 1 >= minimumSpeechFrames) {
+            ranges += (startFrame - paddingFrames).coerceAtLeast(0)..(lastSpeechFrame + paddingFrames).coerceAtMost(frameRms.lastIndex)
+        }
+        return ranges.map { range ->
+            samples.copyOfRange(
+                (range.first * frameSize).coerceAtMost(samples.size),
+                ((range.last + 1) * frameSize).coerceAtMost(samples.size)
+            )
+        }.filter { it.isNotEmpty() }
+    }
+
+    internal fun isRepetitionHallucination(text: String): Boolean {
+        val words = text.lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .trim()
+            .split(Regex("\\s+"))
+            .filter(String::isNotBlank)
+        if (words.size < 6) return false
+        val mostFrequent = words.groupingBy { it }.eachCount().maxOfOrNull { it.value } ?: 0
+        return mostFrequent.toFloat() / words.size >= 0.6f
     }
 
     private fun materializeModel(directory: File, name: String, expectedBytes: Long): File {

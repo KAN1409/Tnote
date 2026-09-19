@@ -43,19 +43,25 @@ class OcrManager(
     }
 
     private suspend fun recognize(source: Bitmap): OcrResult = mutex.withLock {
-        val prepared = prepareForOcr(source)
+        val scaled = scaleForOcr(source)
+        val prepared = prepareDarkVariant(scaled)
         val savedPath = saveBitmapToAppStorage(source)
         try {
             val api = getOrCreateApi()
-            api.setImage(prepared)
-            val text = api.utF8Text.orEmpty().trim()
-            api.clear()
+            val candidates = listOf(
+                recognizeCandidate(api, scaled, TessBaseAPI.PageSegMode.PSM_AUTO),
+                recognizeCandidate(api, prepared, TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
+            )
+            val text = candidates.maxByOrNull { candidate ->
+                candidate.confidence * kotlin.math.sqrt(candidate.text.count(Char::isLetterOrDigit).coerceAtLeast(1).toDouble())
+            }?.text.orEmpty().trim()
             if (text.isBlank()) OcrResult(false, "", savedPath, "No readable Arabic or English text was found.")
             else OcrResult(true, text, savedPath)
         } catch (error: Exception) {
             OcrResult(false, "", savedPath, error.localizedMessage ?: "OCR failed")
         } finally {
-            if (prepared !== source) prepared.recycle()
+            if (prepared !== scaled) prepared.recycle()
+            if (scaled !== source) scaled.recycle()
         }
     }
 
@@ -71,7 +77,7 @@ class OcrManager(
         }
         return TessBaseAPI().also { api ->
             check(api.init(dataDir.absolutePath, "ara+eng")) { "Arabic OCR model could not be initialized." }
-            api.pageSegMode = TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT
+            api.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
             tessApi = api
             loadedModelName = selectedModel
         }
@@ -85,18 +91,32 @@ class OcrManager(
         }
     }
 
-    private fun prepareForOcr(bitmap: Bitmap): Bitmap {
+    private data class Candidate(val text: String, val confidence: Int)
+
+    private fun recognizeCandidate(api: TessBaseAPI, bitmap: Bitmap, pageSegMode: Int): Candidate {
+        api.pageSegMode = pageSegMode
+        api.setImage(bitmap)
+        val candidate = Candidate(api.utF8Text.orEmpty().trim(), api.meanConfidence())
+        api.clear()
+        return candidate
+    }
+
+    private fun scaleForOcr(bitmap: Bitmap): Bitmap {
         val maxDimension = 3200
         val largest = maxOf(bitmap.width, bitmap.height)
         val minimumWidthScale = 1800f / bitmap.width.coerceAtLeast(1)
         val maximumScale = maxDimension.toFloat() / largest.coerceAtLeast(1)
         val scale = minimumWidthScale.coerceAtLeast(1f).coerceAtMost(maximumScale)
-        val scaled = if (scale == 1f) bitmap.copy(Bitmap.Config.ARGB_8888, true) else Bitmap.createScaledBitmap(
+        return if (scale == 1f) bitmap else Bitmap.createScaledBitmap(
             bitmap,
             (bitmap.width * scale).toInt().coerceAtLeast(1),
             (bitmap.height * scale).toInt().coerceAtLeast(1),
             true
         )
+    }
+
+    private fun prepareDarkVariant(bitmap: Bitmap): Bitmap {
+        val scaled = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val pixels = IntArray(scaled.width * scaled.height)
         scaled.getPixels(pixels, 0, scaled.width, 0, 0, scaled.width, scaled.height)
         var luminanceTotal = 0L
@@ -108,7 +128,7 @@ class OcrManager(
             val color = pixels[index]
             var gray = (Color.red(color) * 299 + Color.green(color) * 587 + Color.blue(color) * 114) / 1000
             if (invert) gray = 255 - gray
-            gray = ((gray - 128) * 1.35f + 128).toInt().coerceIn(0, 255)
+            gray = ((gray - 128) * 1.15f + 128).toInt().coerceIn(0, 255)
             pixels[index] = Color.rgb(gray, gray, gray)
         }
         scaled.setPixels(pixels, 0, scaled.width, 0, 0, scaled.width, scaled.height)

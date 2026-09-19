@@ -86,6 +86,20 @@ class ModelManager(private val context: Context) {
             )
         ),
         DownloadableModel(
+            id = VOICE_SMALL,
+            kind = ModelKind.VOICE,
+            title = "Whisper Small",
+            description = "Arabic + English • high accuracy • slower",
+            quality = "High",
+            totalBytes = 375_485_327L,
+            embedded = false,
+            files = listOf(
+                ModelFile("encoder.onnx", "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-encoder.int8.onnx", 112_442_483L, "4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9"),
+                ModelFile("decoder.onnx", "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-decoder.int8.onnx", 262_226_114L, "acad50b5c782696e91b55914cc5ab4f756f1532f76e22aa6fc615f39fb69a8ee"),
+                ModelFile("tokens.txt", "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-tokens.txt", 816_730L, "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126")
+            )
+        ),
+        DownloadableModel(
             id = OCR_FAST,
             kind = ModelKind.OCR,
             title = "Arabic + English Fast OCR",
@@ -164,8 +178,9 @@ class ModelManager(private val context: Context) {
     }
 
     fun activeVoiceFiles(): VoiceModelFiles? {
-        if (activeId(ModelKind.VOICE) == VOICE_TINY) return null
-        val directory = File(root, VOICE_BASE)
+        val active = activeId(ModelKind.VOICE)
+        if (active == VOICE_TINY) return null
+        val directory = File(root, active)
         val files = VoiceModelFiles(File(directory, "encoder.onnx"), File(directory, "decoder.onnx"), File(directory, "tokens.txt"))
         return files.takeIf { it.encoder.isFile && it.decoder.isFile && it.tokens.isFile }
     }
@@ -257,6 +272,7 @@ class ModelManager(private val context: Context) {
     companion object {
         const val VOICE_TINY = "whisper_tiny"
         const val VOICE_BASE = "whisper_base"
+        const val VOICE_SMALL = "whisper_small"
         const val OCR_FAST = "ocr_fast"
         const val OCR_BEST = "ocr_best"
         private const val ACTIVE_VOICE = "active_voice"
