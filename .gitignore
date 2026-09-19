@@ -1,4 +1,9 @@
 *.iml
+app/libs/*.aar
+app/src/main/assets/models/*.onnx
+app/src/main/assets/models/*.onnx.part.*
+app/src/main/assets/models/*-tokens.txt
+app/src/main/assets/tessdata/*.traineddata
 .gradle
 .kotlin
 /local.properties
@@ -10,6 +15,7 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
+**/build/
 /captures
 .externalNativeBuild
 .cxx

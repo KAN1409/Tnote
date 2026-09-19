@@ -24,13 +24,18 @@ interface NoteDao {
            OR content LIKE '%' || :query || '%' 
            OR url LIKE '%' || :query || '%' 
            OR urlDescription LIKE '%' || :query || '%'
-           OR tags LIKE '%' || :query || '%')
+           OR tags LIKE '%' || :query || '%'
+           OR summary LIKE '%' || :query || '%'
+           OR category LIKE '%' || :query || '%')
         ORDER BY isPinned DESC, updatedAt DESC
     """)
     fun searchNotes(query: String): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM notes WHERE id = :id")
     fun getNoteById(id: Long): Flow<NoteEntity?>
+
+    @Query("SELECT * FROM notes WHERE followUpAt IS NOT NULL ORDER BY isFollowUpDone ASC, followUpAt ASC")
+    fun getFollowUps(): Flow<List<NoteEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(note: NoteEntity): Long
@@ -46,4 +51,15 @@ interface NoteDao {
 
     @Query("UPDATE notes SET isPinned = :isPinned, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updatePinStatus(id: Long, isPinned: Boolean, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE notes SET isImportant = :isImportant, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateImportantStatus(id: Long, isImportant: Boolean, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE notes SET followUpAt = :followUpAt, isFollowUpDone = :isDone, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateFollowUp(
+        id: Long,
+        followUpAt: Long?,
+        isDone: Boolean,
+        updatedAt: Long = System.currentTimeMillis()
+    )
 }
