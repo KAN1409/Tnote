@@ -21,6 +21,7 @@ import android.content.Context
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.model.OCRError
 import java.nio.FloatBuffer
+import java.io.File
 
 class ORTSessionManager(
     private val context: Context,
@@ -106,7 +107,8 @@ class ORTSessionManager(
 
     private fun readModelAsset(assetPath: String): ByteArray {
         return try {
-            context.assets.open(assetPath).use { it.readBytes() }
+            val file = File(assetPath)
+            if (file.isFile) file.readBytes() else context.assets.open(assetPath).use { it.readBytes() }
         } catch (t: Throwable) {
             throw OCRError.ModelNotFound(assetPath, t)
         }
