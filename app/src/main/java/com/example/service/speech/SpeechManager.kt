@@ -119,7 +119,7 @@ class SpeechManager(
         _speechState.value = _speechState.value.copy(
             isRecording = false,
             isTranscribing = true,
-            partialText = "Whisper Base is transcribing offline…",
+            partialText = "${transcriber.activeModelName()} is transcribing offline…",
             recordedAudioPath = file.absolutePath
         )
         val result = transcriber.transcribe(file.absolutePath)
