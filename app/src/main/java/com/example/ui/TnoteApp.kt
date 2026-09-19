@@ -93,7 +93,7 @@ import java.util.Locale
 private enum class AppPage { HOME, CAPTURE, TRANSCRIPTIONS, FOLLOW_UPS, DETAIL, MODELS }
 
 @Composable
-fun TnoteApp(viewModel: NoteViewModel) {
+fun TnoteApp(viewModel: NoteViewModel, initialNoteId: Long? = null) {
     val notes by viewModel.allNotes.collectAsStateWithLifecycle()
     val followUps by viewModel.followUps.collectAsStateWithLifecycle()
     val speechState by viewModel.speechState.collectAsStateWithLifecycle()
@@ -107,9 +107,16 @@ fun TnoteApp(viewModel: NoteViewModel) {
     val modelState by viewModel.modelState.collectAsStateWithLifecycle()
 
     var page by remember { mutableStateOf(AppPage.HOME) }
-    var selectedNoteId by remember { mutableStateOf<Long?>(null) }
+    var selectedNoteId by remember { mutableStateOf<Long?>(initialNoteId) }
     val selectedNote = notes.firstOrNull { it.id == selectedNoteId }
     val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(initialNoteId, notes) {
+        if (initialNoteId != null && notes.any { it.id == initialNoteId }) {
+            selectedNoteId = initialNoteId
+            page = AppPage.DETAIL
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.feedbackEvents.collectLatest { snackbar.showSnackbar(it.message) }
