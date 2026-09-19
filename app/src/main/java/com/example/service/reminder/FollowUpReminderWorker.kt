@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.example.R
 import androidx.core.content.ContextCompat
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -24,7 +25,7 @@ class FollowUpReminderWorker(appContext: Context, params: WorkerParameters) : Wo
         val id = inputData.getLong(KEY_NOTE_ID, 0L)
         val title = inputData.getString(KEY_TITLE).orEmpty().ifBlank { "Tnote follow-up" }
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(com.aistudio.voicenotes.vnapp.R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Follow up")
             .setContentText(title)
             .setAutoCancel(true)
