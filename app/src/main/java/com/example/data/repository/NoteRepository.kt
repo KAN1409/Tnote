@@ -29,6 +29,10 @@ class NoteRepository(private val noteDao: NoteDao) {
         noteDao.updatePinStatus(id, !currentPinState)
     }
 
+    suspend fun toggleImportant(id: Long, currentState: Boolean) {
+        noteDao.updateImportantStatus(id, !currentState)
+    }
+
     suspend fun setFollowUp(id: Long, followUpAt: Long?) {
         noteDao.updateFollowUp(id, followUpAt, false)
     }
