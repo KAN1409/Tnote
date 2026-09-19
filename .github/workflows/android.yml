@@ -23,11 +23,17 @@ jobs:
         uses: gradle/actions/wrapper-validation@v4
       - name: Fetch pinned offline models
         run: ./scripts/bootstrap-offline-models.sh
+      - name: Guard update identity
+        run: |
+          grep -q 'applicationId = "com.aistudio.voicenotes.vnapp"' app/build.gradle.kts
+          grep -q 'versionCode = 4' app/build.gradle.kts
+          grep -q '@Database(entities = \[NoteEntity::class\], version = 3' app/src/main/java/com/example/data/local/AppDatabase.kt
+          grep -q 'MIGRATION_2_3' app/src/main/java/com/example/data/local/AppDatabase.kt
       - name: Build, test, and lint
         run: ./gradlew --no-daemon --no-configuration-cache clean assembleDebug testDebugUnitTest lintDebug
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Tnote-2.2.0-accuracy-debug
+          name: Tnote-2.3.0-capture-rebuild-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
