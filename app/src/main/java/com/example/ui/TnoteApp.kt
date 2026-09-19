@@ -237,7 +237,8 @@ private fun HomePage(
     val visible = remember(notes, query) {
         if (query.isBlank()) notes else notes.filter {
             it.title.contains(query, true) || it.content.contains(query, true) ||
-                it.tags.contains(query, true) || it.url.orEmpty().contains(query, true)
+                it.tags.contains(query, true) || it.summary.contains(query, true) ||
+                it.category.contains(query, true) || it.url.orEmpty().contains(query, true)
         }
     }
     Column(modifier.fillMaxSize()) {
