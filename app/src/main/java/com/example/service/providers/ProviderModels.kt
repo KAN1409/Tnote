@@ -6,7 +6,7 @@ enum class ProviderFailureKind { AUTH, QUOTA, RATE_LIMIT, TIMEOUT, NETWORK, UNAV
 
 data class ProviderFailure(
     val kind: ProviderFailureKind,
-    val message: String,
+    override val message: String,
     val retryAfterSeconds: Long? = null,
     val httpCode: Int? = null
 ) : Exception(message)
