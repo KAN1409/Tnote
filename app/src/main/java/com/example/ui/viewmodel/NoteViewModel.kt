@@ -15,6 +15,7 @@ import com.example.service.models.ModelManager
 import com.example.service.speech.PlayerState
 import com.example.service.speech.SpeechManager
 import com.example.service.speech.SpeechState
+import com.example.service.reminder.FollowUpReminderWorker
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -356,6 +357,9 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     fun setFollowUp(note: NoteEntity, followUpAt: Long?) {
         viewModelScope.launch {
             repository.setFollowUp(note.id, followUpAt)
+            val context = getApplication<Application>().applicationContext
+            if (followUpAt == null) FollowUpReminderWorker.cancel(context, note.id)
+            else FollowUpReminderWorker.schedule(context, note.id, note.title, followUpAt)
             emitFeedback(if (followUpAt == null) "Follow-up removed" else "Follow-up scheduled")
         }
     }
@@ -363,6 +367,9 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleFollowUpDone(note: NoteEntity) {
         viewModelScope.launch {
             repository.toggleFollowUpDone(note)
+            val context = getApplication<Application>().applicationContext
+            if (!note.isFollowUpDone) FollowUpReminderWorker.cancel(context, note.id)
+            else note.followUpAt?.let { FollowUpReminderWorker.schedule(context, note.id, note.title, it) }
             emitFeedback(if (note.isFollowUpDone) "Follow-up reopened" else "Follow-up completed")
         }
     }
