@@ -50,7 +50,7 @@ android {
     noCompress += listOf("onnx", "traineddata")
   }
   packaging {
-    jniLibs.pickFirsts += "lib/arm64-v8a/libonnxruntime.so"
+    jniLibs.pickFirsts += "lib/**/libonnxruntime.so"
   }
   testOptions {
     unitTests {
