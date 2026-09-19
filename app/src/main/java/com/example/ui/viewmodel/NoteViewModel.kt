@@ -334,12 +334,21 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun toggleImportant(note: NoteEntity) {
+        viewModelScope.launch {
+            repository.toggleImportant(note.id, note.isImportant)
+            emitFeedback(if (!note.isImportant) "Marked important" else "Removed important mark")
+        }
+    }
+
     fun deleteNote(note: NoteEntity) {
         viewModelScope.launch {
             if (playerState.value.currentPath == note.audioFilePath) {
                 speechManager.stopPlayback()
             }
             repository.deleteNote(note)
+            deleteOwnedFile(note.audioFilePath, "audio_notes")
+            deleteOwnedFile(note.imageUri, "ocr_images")
             emitFeedback("Note deleted")
         }
     }
@@ -417,6 +426,15 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             },
             onFailure = { emitFeedback(it.localizedMessage ?: "Model could not be deleted", isError = true) }
         )
+    }
+
+    private fun deleteOwnedFile(path: String?, expectedDirectory: String) {
+        if (path.isNullOrBlank()) return
+        runCatching {
+            val root = java.io.File(getApplication<Application>().filesDir, expectedDirectory).canonicalFile
+            val target = java.io.File(path).canonicalFile
+            if (target.parentFile == root && target.isFile) target.delete()
+        }
     }
 
     private fun emitFeedback(message: String, isError: Boolean = false) {
