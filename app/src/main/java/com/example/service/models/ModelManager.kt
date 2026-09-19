@@ -102,8 +102,8 @@ class ModelManager(private val context: Context) {
         DownloadableModel(
             id = OCR_FAST,
             kind = ModelKind.OCR,
-            title = "Arabic + English Fast OCR",
-            description = "Built in • quick screenshot reading",
+            title = "Tesseract Arabic + English Fast",
+            description = "Built-in fallback OCR • offline",
             quality = "Standard",
             totalBytes = 5_500_000L,
             embedded = true
@@ -111,9 +111,9 @@ class ModelManager(private val context: Context) {
         DownloadableModel(
             id = OCR_BEST,
             kind = ModelKind.OCR,
-            title = "Arabic + English Best OCR",
-            description = "Highest Tesseract accuracy • slower",
-            quality = "Best",
+            title = "Tesseract Arabic + English Best",
+            description = "Downloaded fallback OCR • slower",
+            quality = "Better",
             totalBytes = 28_004_325L,
             embedded = false,
             files = listOf(
@@ -128,7 +128,7 @@ class ModelManager(private val context: Context) {
 
     fun activate(modelId: String): Result<Unit> = runCatching {
         val model = catalog.firstOrNull { it.id == modelId } ?: error("Unknown model")
-        check(model.embedded || isInstalled(model)) { "Download this model first." }
+        check(model.embedded || isInstalledVerified(model)) { "Download or repair this model first." }
         val key = if (model.kind == ModelKind.VOICE) ACTIVE_VOICE else ACTIVE_OCR
         preferences.edit().putString(key, model.id).apply()
         refresh()
@@ -257,11 +257,15 @@ class ModelManager(private val context: Context) {
         File(File(root, model.id), spec.name).let { it.exists() && it.length() == spec.bytes }
     }
 
+    private fun isInstalledVerified(model: DownloadableModel): Boolean = model.embedded || model.files.all { spec ->
+        File(File(root, model.id), spec.name).let { it.isFile && it.length() == spec.bytes && sha256(it) == spec.sha256 }
+    }
+
     private fun readState(downloads: Map<String, ModelDownloadState> = emptyMap()) = ModelManagerState(
         models = catalog,
         activeVoiceId = activeId(ModelKind.VOICE),
         activeOcrId = activeId(ModelKind.OCR),
-        installedIds = catalog.filter(::isInstalled).mapTo(mutableSetOf()) { it.id },
+        installedIds = catalog.filter(::isInstalledVerified).mapTo(mutableSetOf()) { it.id },
         downloads = downloads
     )
 
