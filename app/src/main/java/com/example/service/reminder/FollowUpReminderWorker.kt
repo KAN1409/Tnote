@@ -3,12 +3,15 @@ package com.example.service.reminder
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.example.R
+import com.example.MainActivity
 import androidx.core.content.ContextCompat
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -24,10 +27,19 @@ class FollowUpReminderWorker(appContext: Context, params: WorkerParameters) : Wo
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return Result.success()
         val id = inputData.getLong(KEY_NOTE_ID, 0L)
         val title = inputData.getString(KEY_TITLE).orEmpty().ifBlank { "Tnote follow-up" }
+        val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_NOTE_ID, id)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext, id.hashCode(), launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Follow up")
             .setContentText(title)
+            .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
@@ -39,6 +51,7 @@ class FollowUpReminderWorker(appContext: Context, params: WorkerParameters) : Wo
         private const val CHANNEL_ID = "follow_up_reminders"
         private const val KEY_NOTE_ID = "note_id"
         private const val KEY_TITLE = "title"
+        const val EXTRA_NOTE_ID = "follow_up_note_id"
         private fun workName(id: Long) = "follow_up_$id"
 
         fun schedule(context: Context, noteId: Long, title: String, atMillis: Long) {
