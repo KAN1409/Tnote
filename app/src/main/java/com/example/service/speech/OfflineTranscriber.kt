@@ -102,11 +102,13 @@ class OfflineTranscriber(
             sqrt(frame.sumOf { it.toDouble() * it } / frame.size.coerceAtLeast(1)).toFloat()
         }
         val peak = frameRms.maxOrNull() ?: 0f
-        val threshold = maxOf(0.006f, peak * 0.08f)
-        if (peak < threshold) return emptyList()
-        val maxSilentFrames = 22 // 440 ms
-        val paddingFrames = 10 // 200 ms
-        val minimumSpeechFrames = 18 // 360 ms
+        val sortedRms = frameRms.sorted()
+        val noiseFloor = sortedRms[(sortedRms.lastIndex * 0.20f).toInt().coerceIn(0, sortedRms.lastIndex)]
+        val threshold = maxOf(0.0045f, noiseFloor * 3.0f, peak * 0.055f)
+        if (peak < threshold || peak < noiseFloor * 1.8f) return emptyList()
+        val maxSilentFrames = 30 // 600 ms: avoid chopping natural Arabic/English pauses
+        val paddingFrames = 12 // 240 ms preserves word edges
+        val minimumSpeechFrames = 15 // 300 ms
         val ranges = mutableListOf<IntRange>()
         var startFrame = -1
         var lastSpeechFrame = -1
