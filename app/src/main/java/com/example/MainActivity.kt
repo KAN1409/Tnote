@@ -1,50 +1,41 @@
 package com.example
 
-import android.Manifest
-import android.os.Build
 import android.os.Bundle
 import android.content.Intent
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.TnoteApp
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.NoteViewModel
-import com.example.service.reminder.FollowUpReminderWorker
 
 class MainActivity : ComponentActivity() {
-    private val requestedNoteId = mutableStateOf<Long?>(null)
+    private var sharedUrl by androidx.compose.runtime.mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        requestedNoteId.value = intent?.getLongExtra(FollowUpReminderWorker.EXTRA_NOTE_ID, -1L)?.takeIf { it > 0 }
         setContent {
             MyApplicationTheme {
-                val notificationPermission = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission()
-                ) { }
-                LaunchedEffect(Unit) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
-                    ) {
-                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                }
                 val viewModel: NoteViewModel = viewModel()
-                TnoteApp(viewModel = viewModel, initialNoteId = requestedNoteId.value)
+                TnoteApp(viewModel = viewModel, sharedUrl = sharedUrl)
             }
         }
+        sharedUrl = extractSharedUrl(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        requestedNoteId.value = intent.getLongExtra(FollowUpReminderWorker.EXTRA_NOTE_ID, -1L).takeIf { it > 0 }
+        sharedUrl = extractSharedUrl(intent)
+    }
+
+    private fun extractSharedUrl(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_SEND || intent.type != "text/plain") return null
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
+        return Regex("https?://\\S+", RegexOption.IGNORE_CASE).find(text)?.value?.trimEnd('.', ',', ')')
     }
 }

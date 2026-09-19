@@ -56,7 +56,7 @@ data class ModelManagerState(
 
 data class VoiceModelFiles(val encoder: File, val decoder: File, val tokens: File)
 data class OcrModelFiles(val dataDirectory: File)
-data class PaddleOcrFiles(val detector: File, val recognizer: File, val dictionary: File)
+data class PaddleOcrModelFiles(val detector: File, val recognizer: File, val recognitionConfig: File)
 
 class ModelManager(private val context: Context) {
     private val preferences = context.getSharedPreferences("offline_models", Context.MODE_PRIVATE)
@@ -103,37 +103,38 @@ class ModelManager(private val context: Context) {
         DownloadableModel(
             id = OCR_FAST,
             kind = ModelKind.OCR,
-            title = "Tesseract Arabic + English Fast",
-            description = "Built-in fallback OCR • offline",
+            title = "Arabic + English Fast OCR",
+            description = "Built in • quick screenshot reading",
             quality = "Standard",
             totalBytes = 5_500_000L,
             embedded = true
         ),
         DownloadableModel(
-            id = OCR_PADDLE,
-            kind = ModelKind.OCR,
-            title = "PaddleOCR v5 Arabic + English",
-            description = "Detection + recognition • mixed Arabic/English • highest OCR accuracy",
-            quality = "High",
-            totalBytes = 12_762_844L,
-            embedded = false,
-            files = listOf(
-                ModelFile("det.onnx", "https://huggingface.co/vladadu/pp-ocrv5-arabic-mobile-onnx/resolve/main/PP-OCRv5_mobile_det.onnx", 4_766_440L, "c8d9b07063420ce5365c74e42532de48238feeeedcdb7a330b195708bc38a93f"),
-                ModelFile("rec.onnx", "https://huggingface.co/vladadu/pp-ocrv5-arabic-mobile-onnx/resolve/main/arabic_PP-OCRv5_mobile_rec.onnx", 7_994_035L, "4e2f4ae42104e1b272463966c56ddafa3c6ad98ce9d8c7ed765ce66666ea13e1"),
-                ModelFile("rec_dict.txt", "https://huggingface.co/vladadu/pp-ocrv5-arabic-mobile-onnx/resolve/main/arabic_PP-OCRv5_mobile_rec_dict.txt", 2_369L, "7f92f7dbb9b75a4787a83bfb4f6d14a8ab515525130c9d40a9036f61cf6999e9")
-            )
-        ),
-        DownloadableModel(
             id = OCR_BEST,
             kind = ModelKind.OCR,
-            title = "Tesseract Arabic + English Best",
-            description = "Downloaded fallback OCR • slower",
-            quality = "Better",
+            title = "Arabic + English Best OCR",
+            description = "Highest Tesseract accuracy • slower",
+            quality = "Best",
             totalBytes = 28_004_325L,
             embedded = false,
             files = listOf(
                 ModelFile("tessdata/ara.traineddata", "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/e12c65a915945e4c28e237a9b52bc4a8f39a0cec/ara.traineddata", 12_603_724L, "ab9d157d8e38ca00e7e39c7d5363a5239e053f5b0dbdb3167dde9d8124335896"),
                 ModelFile("tessdata/eng.traineddata", "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/e12c65a915945e4c28e237a9b52bc4a8f39a0cec/eng.traineddata", 15_400_601L, "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba")
+            )
+        ),
+        DownloadableModel(
+            id = OCR_PADDLE_ARABIC,
+            kind = ModelKind.OCR,
+            title = "PaddleOCR Arabic + English",
+            description = "Neural OCR • mixed Arabic + English • best for screenshots",
+            quality = "Recommended",
+            totalBytes = 12_832_533L,
+            embedded = false,
+            files = listOf(
+                ModelFile("detector.onnx", "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/main/inference.onnx", 4_826_518L, "a431985659dc921974177a95adcfbb90fd9e51989a5e04d70d0b75f597b6e61d"),
+                ModelFile("detector.yml", "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/main/inference.yml", 903L, "98069072e1b6b37d727fd9d9f11725faa46d6ea0de012f2ed26caea011c37699"),
+                ModelFile("recognizer.onnx", "https://huggingface.co/PaddlePaddle/arabic_PP-OCRv5_mobile_rec_onnx/resolve/main/inference.onnx", 7_998_947L, "799113ebf267fbe742deb99eb36e8d42c9ddc5291ceacf92add41b4d52a59110"),
+                ModelFile("recognizer.yml", "https://huggingface.co/PaddlePaddle/arabic_PP-OCRv5_mobile_rec_onnx/resolve/main/inference.yml", 6_165L, "21368419e6c016c31db55d316d59e11c128e1913e6e6fe10287084710043d3a6")
             )
         )
     )
@@ -143,7 +144,7 @@ class ModelManager(private val context: Context) {
 
     fun activate(modelId: String): Result<Unit> = runCatching {
         val model = catalog.firstOrNull { it.id == modelId } ?: error("Unknown model")
-        check(model.embedded || isInstalled(model)) { "Download or repair this model first." }
+        check(model.embedded || isInstalled(model)) { "Download this model first." }
         val key = if (model.kind == ModelKind.VOICE) ACTIVE_VOICE else ACTIVE_OCR
         preferences.edit().putString(key, model.id).apply()
         refresh()
@@ -208,14 +209,16 @@ class ModelManager(private val context: Context) {
         }
     }
 
-    fun activePaddleOcrFiles(): PaddleOcrFiles? {
-        if (activeId(ModelKind.OCR) != OCR_PADDLE) return null
-        val directory = File(root, OCR_PADDLE)
-        val files = PaddleOcrFiles(File(directory, "det.onnx"), File(directory, "rec.onnx"), File(directory, "rec_dict.txt"))
-        return files.takeIf { it.detector.isFile && it.recognizer.isFile && it.dictionary.isFile }
+    fun activePaddleOcrFiles(): PaddleOcrModelFiles? {
+        if (activeId(ModelKind.OCR) != OCR_PADDLE_ARABIC) return null
+        val directory = File(root, OCR_PADDLE_ARABIC)
+        return PaddleOcrModelFiles(
+            detector = File(directory, "detector.onnx"),
+            recognizer = File(directory, "recognizer.onnx"),
+            recognitionConfig = File(directory, "recognizer.yml")
+        ).takeIf { it.detector.isFile && it.recognizer.isFile && it.recognitionConfig.isFile }
     }
 
-    fun activeOcrId(): String = activeId(ModelKind.OCR)
     fun activeVoiceName(): String = catalog.first { it.id == activeId(ModelKind.VOICE) }.title
     fun activeOcrName(): String = catalog.first { it.id == activeId(ModelKind.OCR) }.title
 
@@ -280,10 +283,6 @@ class ModelManager(private val context: Context) {
         File(File(root, model.id), spec.name).let { it.exists() && it.length() == spec.bytes }
     }
 
-    private fun isInstalledVerified(model: DownloadableModel): Boolean = model.embedded || model.files.all { spec ->
-        File(File(root, model.id), spec.name).let { it.isFile && it.length() == spec.bytes && sha256(it) == spec.sha256 }
-    }
-
     private fun readState(downloads: Map<String, ModelDownloadState> = emptyMap()) = ModelManagerState(
         models = catalog,
         activeVoiceId = activeId(ModelKind.VOICE),
@@ -302,7 +301,7 @@ class ModelManager(private val context: Context) {
         const val VOICE_SMALL = "whisper_small"
         const val OCR_FAST = "ocr_fast"
         const val OCR_BEST = "ocr_best"
-        const val OCR_PADDLE = "ocr_paddle_v5_ar_en"
+        const val OCR_PADDLE_ARABIC = "ocr_paddle_arabic_v5"
         private const val ACTIVE_VOICE = "active_voice"
         private const val ACTIVE_OCR = "active_ocr"
     }

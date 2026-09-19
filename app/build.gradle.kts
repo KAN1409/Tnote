@@ -6,11 +6,6 @@ plugins {
 }
 
 android {
-  packaging {
-    jniLibs {
-      pickFirsts += setOf("**/libonnxruntime.so")
-    }
-  }
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
@@ -18,8 +13,8 @@ android {
     applicationId = "com.aistudio.voicenotes.vnapp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "2.3.0"
+    versionCode = 6
+    versionName = "2.4.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     ndk { abiFilters += listOf("arm64-v8a") }
@@ -95,16 +90,15 @@ dependencies {
   // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.coil.compose)
   implementation(libs.tesseract4android)
   implementation(project(":ppocr-sdk"))
+  implementation(libs.androidx.work.runtime.ktx)
   implementation(files("libs/sherpa-onnx-1.13.8.aar"))
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
-  testImplementation("androidx.sqlite:sqlite-framework:2.5.0")
   testImplementation(libs.androidx.junit)
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)

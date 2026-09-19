@@ -49,6 +49,7 @@ import com.example.data.model.NoteType
 fun AddEditNoteDialog(
     note: NoteEntity?,
     initialType: NoteType,
+    prefillUrl: String = "",
     onSave: (title: String, content: String, type: NoteType, url: String?, urlDescription: String?, tags: String) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
@@ -60,7 +61,7 @@ fun AddEditNoteDialog(
     var selectedType by remember { mutableStateOf(note?.type ?: initialType) }
     var title by remember { mutableStateOf(note?.title ?: "") }
     var content by remember { mutableStateOf(note?.content ?: "") }
-    var url by remember { mutableStateOf(note?.url ?: "") }
+    var url by remember(note?.id, prefillUrl) { mutableStateOf(note?.url ?: prefillUrl) }
     var urlDescription by remember { mutableStateOf(note?.urlDescription ?: "") }
     var tags by remember { mutableStateOf(note?.tags ?: "") }
 

@@ -116,29 +116,11 @@ class SpeechManager(
         if (file == null || !file.exists() || file.length() <= 44) {
             return SpeechState(errorMessage = "No usable audio was recorded.").also { _speechState.value = it }
         }
-        _speechState.value = _speechState.value.copy(
+        return _speechState.value.copy(
             isRecording = false,
-            isTranscribing = true,
-            partialText = "${transcriber.activeModelName()} is transcribing offline…",
+            isTranscribing = false,
+            partialText = "",
             recordedAudioPath = file.absolutePath
-        )
-        val result = transcriber.transcribe(file.absolutePath)
-        return result.fold(
-            onSuccess = { text ->
-                _speechState.value.copy(
-                    isTranscribing = false,
-                    transcribedText = text,
-                    partialText = "",
-                    errorMessage = null
-                )
-            },
-            onFailure = { error ->
-                _speechState.value.copy(
-                    isTranscribing = false,
-                    partialText = "",
-                    errorMessage = error.localizedMessage ?: "Offline transcription failed."
-                )
-            }
         ).also { _speechState.value = it }
     }
 

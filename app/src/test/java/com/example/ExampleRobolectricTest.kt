@@ -7,11 +7,16 @@ import com.example.data.local.AppDatabase
 import com.example.data.model.NoteEntity
 import com.example.data.model.NoteType
 import com.example.service.models.ModelManager
+import com.example.service.providers.TranscriptQualityGate
+import com.example.service.analysis.CaptureAnalyzer
+import com.example.service.url.UrlMetadataFetcher
 import com.example.service.speech.OfflineTranscriber
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,6 +26,18 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ExampleRobolectricTest {
+
+    @Test
+    fun rejectsRepeatedWhisperHallucination() {
+        val verdict = TranscriptQualityGate.validate("نحن نحن نحن نحن نحن نحن نحن نحن نحن نحن", 5)
+        assertFalse(verdict.accepted)
+    }
+
+    @Test
+    fun acceptsEgyptianArabicEnglishCodeSwitching() {
+        val verdict = TranscriptQualityGate.validate("ده اختبار جديد للترجمة This is a new transcription test", 8)
+        assertTrue(verdict.accepted)
+    }
 
   private lateinit var database: AppDatabase
 
@@ -84,6 +101,25 @@ class ExampleRobolectricTest {
     assertEquals(true, manager.activate(ModelManager.VOICE_BASE).isFailure)
     assertEquals(true, manager.activate(ModelManager.VOICE_SMALL).isFailure)
     assertEquals(true, manager.activate(ModelManager.OCR_BEST).isFailure)
+    assertEquals(true, manager.activate(ModelManager.OCR_PADDLE_ARABIC).isFailure)
+  }
+
+  @Test
+  fun `capture analyzer titles and categorizes bilingual transcript`() {
+    val insights = CaptureAnalyzer.analyze(
+      NoteType.VOICE,
+      "ده اختبار جديد للترجمة. This is a new transcript test for the new model."
+    )
+
+    assertEquals("ده اختبار جديد للترجمة", insights.title)
+    assertEquals("Learning", insights.category)
+    assertEquals(true, insights.summary.contains("transcript test"))
+  }
+
+  @Test
+  fun `url normalizer preserves https and adds it when missing`() {
+    assertEquals("https://youtube.com/watch?v=1", UrlMetadataFetcher.normalize("youtube.com/watch?v=1"))
+    assertEquals("https://example.com", UrlMetadataFetcher.normalize("https://example.com"))
   }
 
   @Test

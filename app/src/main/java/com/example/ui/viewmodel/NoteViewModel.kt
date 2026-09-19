@@ -11,11 +11,16 @@ import com.example.data.model.NoteType
 import com.example.data.repository.NoteRepository
 import com.example.service.ocr.OcrManager
 import com.example.service.ocr.OcrResult
+import com.example.service.analysis.CaptureAnalyzer
 import com.example.service.models.ModelManager
+import com.example.service.providers.SecureProviderStore
+import com.example.service.providers.TranscriptionOrchestrator
+import com.example.service.reminders.ReminderScheduler
+import com.example.service.speech.OfflineTranscriber
 import com.example.service.speech.PlayerState
 import com.example.service.speech.SpeechManager
 import com.example.service.speech.SpeechState
-import com.example.service.reminder.FollowUpReminderWorker
+import com.example.service.url.UrlMetadataFetcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -50,6 +55,11 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     val modelState = modelManager.state
     val speechManager = SpeechManager(application.applicationContext, modelManager)
     val ocrManager = OcrManager(application.applicationContext, modelManager)
+    val providerStore = SecureProviderStore(application.applicationContext)
+    private val transcriptionOrchestrator = TranscriptionOrchestrator(
+        providerStore,
+        OfflineTranscriber(application.applicationContext, modelManager)
+    )
     private val modelDownloadJobs = mutableMapOf<String, Job>()
 
     init {
@@ -94,6 +104,8 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _activeNoteTypeForCreate = MutableStateFlow(NoteType.TEXT)
     val activeNoteTypeForCreate: StateFlow<NoteType> = _activeNoteTypeForCreate.asStateFlow()
+    private val _prefillUrl = MutableStateFlow("")
+    val prefillUrl: StateFlow<String> = _prefillUrl.asStateFlow()
 
     // OCR Processing State
     private val _isOcrProcessing = MutableStateFlow(false)
@@ -168,23 +180,17 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 emitFeedback(result.errorMessage ?: "Voice recording could not be saved", isError = true)
                 return@launch
             }
-            val usableTranscript = result.transcribedText.trim()
-            val insight = if (usableTranscript.length >= 12) CaptureIntelligence.analyze(usableTranscript, NoteType.VOICE) else null
-            val noteTitle = title.trim().ifBlank { insight?.title ?: "Voice Note" }
-            val note = NoteEntity(
+            val pending = NoteEntity(
                 type = NoteType.VOICE,
-                title = noteTitle,
-                content = usableTranscript,
+                title = title.ifBlank { "Voice note" },
                 audioFilePath = audioPath,
                 durationSeconds = result.durationSeconds,
-                tags = insight?.tags.orEmpty(),
-                summary = insight?.summary.orEmpty(),
-                category = insight?.category.orEmpty()
+                transcriptionStatus = "PROCESSING"
             )
-            repository.insertNote(note)
+            val id = repository.insertNote(pending)
             _isRecordingSheetVisible.value = false
-            if (result.errorMessage == null) emitFeedback("Voice note transcribed offline")
-            else emitFeedback("Audio saved, but transcription failed: ${result.errorMessage}", isError = true)
+            emitFeedback("Transcribing…")
+            transcribeIntoNote(pending.copy(id = id), "automatic")
         }
     }
 
@@ -245,17 +251,28 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveOcrNote(title: String, extractedText: String, imagePath: String?) {
         viewModelScope.launch {
-            val usableText = extractedText.trim()
-            val insight = if (usableText.length >= 12) CaptureIntelligence.analyze(usableText, NoteType.OCR) else null
-            val noteTitle = title.trim().ifBlank { insight?.title ?: "Image OCR" }
+            val result = _lastOcrResult.value
+            if (result == null || !result.isSuccess) {
+                emitFeedback("OCR quality is too low. Retry with another provider.", isError = true)
+                return@launch
+            }
+            val insights = CaptureAnalyzer.analyze(NoteType.OCR, extractedText, title)
             val note = NoteEntity(
                 type = NoteType.OCR,
-                title = noteTitle,
-                content = usableText,
+                title = insights.title,
+                content = extractedText,
+                summary = insights.summary,
+                category = insights.category,
                 imageUri = imagePath,
-                tags = insight?.tags.orEmpty(),
-                summary = insight?.summary.orEmpty(),
-                category = insight?.category.orEmpty()
+                rawOcrText = result.text,
+                normalizedOcrText = extractedText,
+                ocrProvider = result.provider,
+                ocrModel = result.model,
+                detectedLanguages = result.detectedLanguages,
+                providerConfidence = result.confidence,
+                ocrGeometryJson = result.geometryJson,
+                ocrTimestamp = System.currentTimeMillis(),
+                ocrStatus = "SUCCESS"
             )
             repository.insertNote(note)
             _isOcrSheetVisible.value = false
@@ -268,6 +285,14 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     fun openCreateNoteDialog(type: NoteType = NoteType.TEXT) {
         _editingNote.value = null
         _activeNoteTypeForCreate.value = type
+        if (type != NoteType.URL) _prefillUrl.value = ""
+        _isAddEditDialogVisible.value = true
+    }
+
+    fun openSharedUrl(url: String) {
+        _editingNote.value = null
+        _activeNoteTypeForCreate.value = NoteType.URL
+        _prefillUrl.value = UrlMetadataFetcher.normalize(url)
         _isAddEditDialogVisible.value = true
     }
 
@@ -280,6 +305,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     fun closeAddEditDialog() {
         _isAddEditDialogVisible.value = false
         _editingNote.value = null
+        _prefillUrl.value = ""
     }
 
     fun saveNote(
@@ -293,45 +319,44 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val current = _editingNote.value
             if (current != null) {
+                val analysisText = if (type == NoteType.URL) "$urlDescription\n$content" else content
+                val insights = CaptureAnalyzer.analyze(type, analysisText, title, current.summary)
                 val updated = current.copy(
-                    title = title.trim().ifBlank { "Untitled Note" },
+                    title = insights.title,
                     content = content.trim(),
                     url = if (type == NoteType.URL) url?.trim() else current.url,
                     urlDescription = if (type == NoteType.URL) urlDescription?.trim() else current.urlDescription,
                     tags = tags.trim(),
+                    summary = insights.summary,
+                    category = insights.category,
                     updatedAt = System.currentTimeMillis()
                 )
                 repository.updateNote(updated)
+                if (type == NoteType.URL && !url.isNullOrBlank()) viewModelScope.launch { enrichUrlNote(updated) }
                 emitFeedback("Note updated")
             } else {
-                val normalizedContent = content.trim()
-                val normalizedUrl = if (type == NoteType.URL) url?.trim() else null
-                val intelligenceSource = if (normalizedContent.isNotBlank()) normalizedContent else urlDescription.orEmpty()
-                val insight = CaptureIntelligence.analyze(intelligenceSource, type, normalizedUrl)
+                val normalizedUrl = if (type == NoteType.URL && !url.isNullOrBlank()) UrlMetadataFetcher.normalize(url) else null
+                val analysisText = if (type == NoteType.URL) "$urlDescription\n$content" else content
+                val insights = CaptureAnalyzer.analyze(type, analysisText, title)
                 val newNote = NoteEntity(
                     type = type,
-                    title = title.trim().ifBlank { insight.title.ifBlank {
-                        when (type) {
-                            NoteType.URL -> "Saved Link"
-                            NoteType.VOICE -> "Voice Note"
-                            NoteType.OCR -> "Image OCR"
-                            NoteType.TEXT -> "Untitled Note"
-                        }
-                    } },
-                    content = normalizedContent,
+                    title = insights.title,
+                    content = content.trim(),
                     url = normalizedUrl,
                     urlDescription = if (type == NoteType.URL) urlDescription?.trim() else null,
-                    tags = tags.trim().ifBlank { insight.tags },
-                    summary = insight.summary,
-                    category = insight.category,
+                    tags = tags.trim(),
+                    summary = insights.summary,
+                    category = insights.category,
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
                 )
-                repository.insertNote(newNote)
+                val id = repository.insertNote(newNote)
+                if (type == NoteType.URL && normalizedUrl != null) viewModelScope.launch { enrichUrlNote(newNote.copy(id = id)) }
                 emitFeedback("Note created")
             }
             _isAddEditDialogVisible.value = false
             _editingNote.value = null
+            _prefillUrl.value = ""
         }
     }
 
@@ -346,7 +371,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleImportant(note: NoteEntity) {
         viewModelScope.launch {
             repository.toggleImportant(note.id, note.isImportant)
-            emitFeedback(if (!note.isImportant) "Marked important" else "Removed important mark")
+            emitFeedback(if (!note.isImportant) "Marked important" else "Removed from important")
         }
     }
 
@@ -356,8 +381,9 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 speechManager.stopPlayback()
             }
             repository.deleteNote(note)
-            deleteOwnedFile(note.audioFilePath, "audio_notes")
-            deleteOwnedFile(note.imageUri, "ocr_images")
+            ReminderScheduler.cancel(getApplication(), note.id)
+            note.audioFilePath?.let { runCatching { java.io.File(it).delete() } }
+            note.imageUri?.let { runCatching { java.io.File(it).delete() } }
             emitFeedback("Note deleted")
         }
     }
@@ -365,9 +391,8 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     fun setFollowUp(note: NoteEntity, followUpAt: Long?) {
         viewModelScope.launch {
             repository.setFollowUp(note.id, followUpAt)
-            val context = getApplication<Application>().applicationContext
-            if (followUpAt == null) FollowUpReminderWorker.cancel(context, note.id)
-            else FollowUpReminderWorker.schedule(context, note.id, note.title, followUpAt)
+            if (followUpAt == null) ReminderScheduler.cancel(getApplication(), note.id)
+            else ReminderScheduler.schedule(getApplication(), note.id, note.title, followUpAt)
             emitFeedback(if (followUpAt == null) "Follow-up removed" else "Follow-up scheduled")
         }
     }
@@ -375,33 +400,73 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleFollowUpDone(note: NoteEntity) {
         viewModelScope.launch {
             repository.toggleFollowUpDone(note)
-            val context = getApplication<Application>().applicationContext
-            if (!note.isFollowUpDone) FollowUpReminderWorker.cancel(context, note.id)
-            else note.followUpAt?.let { FollowUpReminderWorker.schedule(context, note.id, note.title, it) }
             emitFeedback(if (note.isFollowUpDone) "Follow-up reopened" else "Follow-up completed")
         }
     }
 
-    fun retranscribe(note: NoteEntity) {
+    fun retranscribe(note: NoteEntity, provider: String = "automatic") {
         val path = note.audioFilePath ?: return
         viewModelScope.launch {
-            emitFeedback("Transcribing with ${modelManager.activeVoiceName()}…")
-            speechManager.transcribeFile(path).fold(
-                onSuccess = { transcript ->
-                    val insight = CaptureIntelligence.analyze(transcript, NoteType.VOICE)
-                    val shouldRefreshTitle = note.title.startsWith("Voice Note") || note.title == "Untitled Note"
-                    repository.updateNote(note.copy(
-                        title = if (shouldRefreshTitle) insight.title else note.title,
-                        content = transcript,
-                        tags = if (note.tags.isBlank()) insight.tags else note.tags,
-                        summary = insight.summary,
-                        category = insight.category,
-                        updatedAt = System.currentTimeMillis()
-                    ))
-                    emitFeedback("Transcription updated")
-                },
-                onFailure = { emitFeedback(it.localizedMessage ?: "Transcription failed", isError = true) }
+            emitFeedback("Transcribing…")
+            transcribeIntoNote(note.copy(transcriptionRetryCount = note.transcriptionRetryCount + 1), provider)
+        }
+    }
+
+    private suspend fun transcribeIntoNote(note: NoteEntity, provider: String) {
+        val path = note.audioFilePath ?: return
+        repository.updateNote(note.copy(transcriptionStatus = "PROCESSING", transcriptionFailureReason = ""))
+        transcriptionOrchestrator.transcribe(path, note.durationSeconds, provider).fold(
+            onSuccess = { result ->
+                // Semantic intelligence is deliberately downstream of accepted raw speech.
+                val insights = CaptureAnalyzer.analyze(NoteType.VOICE, result.rawTranscript, note.title.takeUnless { it == "Voice note" }.orEmpty())
+                repository.updateNote(note.copy(
+                    title = insights.title,
+                    content = result.rawTranscript,
+                    rawTranscript = result.rawTranscript,
+                    cleanedTranscript = "",
+                    summary = insights.summary,
+                    category = insights.category,
+                    transcriptionProvider = result.provider,
+                    transcriptionModel = result.model,
+                    detectedLanguage = result.detectedLanguage,
+                    transcriptionTimestamp = result.timestamp,
+                    transcriptionStatus = "SUCCESS",
+                    transcriptionFailureReason = "",
+                    updatedAt = System.currentTimeMillis()
+                ))
+                emitFeedback("Transcript saved • ${result.provider} / ${result.model}")
+            },
+            onFailure = { error ->
+                repository.updateNote(note.copy(
+                    content = "",
+                    transcriptionStatus = "FAILED",
+                    transcriptionFailureReason = error.localizedMessage ?: "Transcription failed",
+                    updatedAt = System.currentTimeMillis()
+                ))
+                emitFeedback("Transcription quality was too low. Retry with another provider.", isError = true)
+            }
+        )
+    }
+
+    private suspend fun enrichUrlNote(note: NoteEntity) {
+        val url = note.url ?: return
+        UrlMetadataFetcher.fetch(url).onSuccess { metadata ->
+            val text = listOf(metadata.description, note.content).filter(String::isNotBlank).joinToString("\n")
+            val insights = CaptureAnalyzer.analyze(
+                NoteType.URL,
+                text,
+                preferredTitle = metadata.title.ifBlank { note.title },
+                preferredSummary = metadata.description
             )
+            repository.updateNote(note.copy(
+                title = insights.title,
+                summary = insights.summary,
+                category = insights.category,
+                urlDescription = metadata.siteName.ifBlank { note.urlDescription.orEmpty() },
+                updatedAt = System.currentTimeMillis()
+            ))
+        }.onFailure {
+            emitFeedback("Link saved; this site did not expose a preview")
         }
     }
 
@@ -441,15 +506,6 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             },
             onFailure = { emitFeedback(it.localizedMessage ?: "Model could not be deleted", isError = true) }
         )
-    }
-
-    private fun deleteOwnedFile(path: String?, expectedDirectory: String) {
-        if (path.isNullOrBlank()) return
-        runCatching {
-            val root = java.io.File(getApplication<Application>().filesDir, expectedDirectory).canonicalFile
-            val target = java.io.File(path).canonicalFile
-            if (target.parentFile == root && target.isFile) target.delete()
-        }
     }
 
     private fun emitFeedback(message: String, isError: Boolean = false) {

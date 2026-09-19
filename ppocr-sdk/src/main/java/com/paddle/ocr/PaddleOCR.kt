@@ -111,10 +111,11 @@ class PaddleOCR private constructor(
     }
 
     suspend fun release() {
-        withContext(Dispatchers.IO) { engine.release() }
+        withContext(Dispatchers.IO) {
+            engine.release()
+        }
     }
 
-    fun close() {
-        engine.release()
-    }
+    /** Synchronous close for Android lifecycle owners that already run off the inference path. */
+    fun releaseNow() = engine.release()
 }
