@@ -111,8 +111,10 @@ class PaddleOCR private constructor(
     }
 
     suspend fun release() {
-        withContext(Dispatchers.IO) {
-            engine.release()
-        }
+        withContext(Dispatchers.IO) { engine.release() }
+    }
+
+    fun close() {
+        engine.release()
     }
 }
