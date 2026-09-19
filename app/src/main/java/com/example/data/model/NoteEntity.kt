@@ -19,6 +19,9 @@ data class NoteEntity(
     val followUpAt: Long? = null,
     val isFollowUpDone: Boolean = false,
     val tags: String = "",
+    val summary: String = "",
+    val category: String = "",
+    val isImportant: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
