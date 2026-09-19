@@ -13,6 +13,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.TnoteApp
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.NoteViewModel
+import com.example.service.reminder.FollowUpReminderWorker
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,7 +32,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val viewModel: NoteViewModel = viewModel()
-                TnoteApp(viewModel = viewModel)
+                val requestedNoteId = intent?.getLongExtra(FollowUpReminderWorker.EXTRA_NOTE_ID, -1L)?.takeIf { it > 0 }
+                TnoteApp(viewModel = viewModel, initialNoteId = requestedNoteId)
             }
         }
     }
