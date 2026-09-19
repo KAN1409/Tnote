@@ -302,20 +302,26 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 repository.updateNote(updated)
                 emitFeedback("Note updated")
             } else {
+                val normalizedContent = content.trim()
+                val normalizedUrl = if (type == NoteType.URL) url?.trim() else null
+                val intelligenceSource = if (normalizedContent.isNotBlank()) normalizedContent else urlDescription.orEmpty()
+                val insight = CaptureIntelligence.analyze(intelligenceSource, type, normalizedUrl)
                 val newNote = NoteEntity(
                     type = type,
-                    title = title.trim().ifBlank {
+                    title = title.trim().ifBlank { insight.title.ifBlank {
                         when (type) {
                             NoteType.URL -> "Saved Link"
                             NoteType.VOICE -> "Voice Note"
                             NoteType.OCR -> "Image OCR"
                             NoteType.TEXT -> "Untitled Note"
                         }
-                    },
-                    content = content.trim(),
-                    url = if (type == NoteType.URL) url?.trim() else null,
+                    } },
+                    content = normalizedContent,
+                    url = normalizedUrl,
                     urlDescription = if (type == NoteType.URL) urlDescription?.trim() else null,
-                    tags = tags.trim(),
+                    tags = tags.trim().ifBlank { insight.tags },
+                    summary = insight.summary,
+                    category = insight.category,
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
                 )
