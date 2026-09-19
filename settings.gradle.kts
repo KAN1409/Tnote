@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 rootProject.name = "Voice Notes"
 
 include(":app")
+include(":ppocr-sdk")
