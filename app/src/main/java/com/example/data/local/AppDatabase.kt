@@ -30,7 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_2_3 = object : Migration(2, 3) {
+        internal val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE notes ADD COLUMN summary TEXT NOT NULL DEFAULT '';")
                 db.execSQL("ALTER TABLE notes ADD COLUMN category TEXT NOT NULL DEFAULT '';")
@@ -38,7 +38,7 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
+        internal val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE notes ADD COLUMN followUpAt INTEGER")
                 db.execSQL("ALTER TABLE notes ADD COLUMN isFollowUpDone INTEGER NOT NULL DEFAULT 0")
