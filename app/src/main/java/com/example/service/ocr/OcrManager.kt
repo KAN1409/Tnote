@@ -26,6 +26,11 @@ class OcrManager(
     private val context: Context,
     private val modelManager: ModelManager
 ) {
+    companion object {
+        private const val MIN_ACCEPTED_CONFIDENCE = 45
+        private const val MIN_USEFUL_CHARACTERS = 6
+    }
+
     private val mutex = Mutex()
     private var tessApi: TessBaseAPI? = null
     private var loadedModelName: String? = null
@@ -52,11 +57,16 @@ class OcrManager(
                 recognizeCandidate(api, scaled, TessBaseAPI.PageSegMode.PSM_AUTO),
                 recognizeCandidate(api, prepared, TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
             )
-            val text = candidates.maxByOrNull { candidate ->
+            val best = candidates.maxByOrNull { candidate ->
                 candidate.confidence * kotlin.math.sqrt(candidate.text.count(Char::isLetterOrDigit).coerceAtLeast(1).toDouble())
-            }?.text.orEmpty().trim()
+            }
+            val text = best?.text.orEmpty().trim()
+            val confidence = best?.confidence ?: 0
+            val usefulCharacters = text.count(Char::isLetterOrDigit)
             if (text.isBlank()) OcrResult(false, "", savedPath, "No readable Arabic or English text was found.")
-            else OcrResult(true, text, savedPath)
+            else if (confidence < MIN_ACCEPTED_CONFIDENCE || usefulCharacters < MIN_USEFUL_CHARACTERS) {
+                OcrResult(false, text, savedPath, "OCR result was too uncertain to save automatically.")
+            } else OcrResult(true, text, savedPath)
         } catch (error: Exception) {
             OcrResult(false, "", savedPath, error.localizedMessage ?: "OCR failed")
         } finally {
