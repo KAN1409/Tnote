@@ -167,13 +167,15 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 emitFeedback(result.errorMessage ?: "Voice recording could not be saved", isError = true)
                 return@launch
             }
-            val noteTitle = title.ifBlank { "Voice Note - ${java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}" }
+            val insight = CaptureIntelligence.analyze(result.transcribedText, NoteType.VOICE)
+            val noteTitle = title.trim().ifBlank { insight.title }
             val note = NoteEntity(
                 type = NoteType.VOICE,
                 title = noteTitle,
                 content = result.transcribedText,
                 audioFilePath = audioPath,
-                durationSeconds = result.durationSeconds
+                durationSeconds = result.durationSeconds,
+                tags = insight.tags
             )
             repository.insertNote(note)
             _isRecordingSheetVisible.value = false
@@ -239,12 +241,14 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveOcrNote(title: String, extractedText: String, imagePath: String?) {
         viewModelScope.launch {
-            val noteTitle = title.ifBlank { "OCR Note - ${java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}" }
+            val insight = CaptureIntelligence.analyze(extractedText, NoteType.OCR)
+            val noteTitle = title.trim().ifBlank { insight.title }
             val note = NoteEntity(
                 type = NoteType.OCR,
                 title = noteTitle,
                 content = extractedText,
-                imageUri = imagePath
+                imageUri = imagePath,
+                tags = insight.tags
             )
             repository.insertNote(note)
             _isOcrSheetVisible.value = false
@@ -356,7 +360,14 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             emitFeedback("Transcribing with ${modelManager.activeVoiceName()}…")
             speechManager.transcribeFile(path).fold(
                 onSuccess = { transcript ->
-                    repository.updateNote(note.copy(content = transcript, updatedAt = System.currentTimeMillis()))
+                    val insight = CaptureIntelligence.analyze(transcript, NoteType.VOICE)
+                    val shouldRefreshTitle = note.title.startsWith("Voice Note") || note.title == "Untitled Note"
+                    repository.updateNote(note.copy(
+                        title = if (shouldRefreshTitle) insight.title else note.title,
+                        content = transcript,
+                        tags = if (note.tags.isBlank()) insight.tags else note.tags,
+                        updatedAt = System.currentTimeMillis()
+                    ))
                     emitFeedback("Transcription updated")
                 },
                 onFailure = { emitFeedback(it.localizedMessage ?: "Transcription failed", isError = true) }
