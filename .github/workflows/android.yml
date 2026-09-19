@@ -31,3 +31,13 @@ jobs:
           name: Tnote-2.4.0-cloud-provider-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Package Android APK signing tool
+        run: |
+          tools_dir="$(dirname "$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)")"
+          tar -czf apksigner-tools.tgz -C "$tools_dir" apksigner lib/apksigner.jar
+      - name: Upload APK signing tool
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apksigner-tools
+          path: apksigner-tools.tgz
+          if-no-files-found: error
