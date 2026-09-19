@@ -29,6 +29,8 @@ jobs:
           grep -q 'versionCode = 4' app/build.gradle.kts
           grep -q '@Database(entities = \[NoteEntity::class\], version = 3' app/src/main/java/com/example/data/local/AppDatabase.kt
           grep -q 'MIGRATION_2_3' app/src/main/java/com/example/data/local/AppDatabase.kt
+          test -f my-upload-key.jks
+          keytool -list -keystore my-upload-key.jks -storepass "${STORE_PASSWORD:-android}" >/dev/null 2>&1 || { echo 'Signing keystore is not readable with configured credentials'; exit 1; }
       - name: Build, test, and lint
         run: ./gradlew --no-daemon --no-configuration-cache clean assembleDebug testDebugUnitTest lintDebug
       - name: Upload debug APK
