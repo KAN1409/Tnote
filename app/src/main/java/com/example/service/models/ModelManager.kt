@@ -128,7 +128,7 @@ class ModelManager(private val context: Context) {
 
     fun activate(modelId: String): Result<Unit> = runCatching {
         val model = catalog.firstOrNull { it.id == modelId } ?: error("Unknown model")
-        check(model.embedded || isInstalledVerified(model)) { "Download or repair this model first." }
+        check(model.embedded || isInstalled(model)) { "Download or repair this model first." }
         val key = if (model.kind == ModelKind.VOICE) ACTIVE_VOICE else ACTIVE_OCR
         preferences.edit().putString(key, model.id).apply()
         refresh()
@@ -265,7 +265,7 @@ class ModelManager(private val context: Context) {
         models = catalog,
         activeVoiceId = activeId(ModelKind.VOICE),
         activeOcrId = activeId(ModelKind.OCR),
-        installedIds = catalog.filter(::isInstalledVerified).mapTo(mutableSetOf()) { it.id },
+        installedIds = catalog.filter(::isInstalled).mapTo(mutableSetOf()) { it.id },
         downloads = downloads
     )
 
