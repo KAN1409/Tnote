@@ -28,6 +28,8 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreTime
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -159,6 +161,7 @@ fun TnoteApp(viewModel: NoteViewModel) {
                 note = selectedNote,
                 onBack = { page = AppPage.HOME },
                 onEdit = viewModel::openEditNoteDialog,
+                onImportant = viewModel::toggleImportant,
                 onTomorrow = { note ->
                     viewModel.setFollowUp(note, System.currentTimeMillis() + 24 * 60 * 60 * 1000L)
                 },
@@ -486,6 +489,7 @@ private fun DetailPage(
     note: NoteEntity?,
     onBack: () -> Unit,
     onEdit: (NoteEntity) -> Unit,
+    onImportant: (NoteEntity) -> Unit,
     onTomorrow: (NoteEntity) -> Unit,
     onRemoveFollowUp: (NoteEntity) -> Unit,
     onRetranscribe: (NoteEntity) -> Unit,
@@ -500,7 +504,12 @@ private fun DetailPage(
         TopAppBar(
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             title = { Text(note.type.label) },
-            actions = { TextButton(onClick = { onEdit(note) }) { Text("Edit") } }
+            actions = {
+                IconButton(onClick = { onImportant(note) }) {
+                    Icon(if (note.isImportant) Icons.Default.Star else Icons.Default.StarBorder, if (note.isImportant) "Remove important" else "Mark important", tint = MaterialTheme.colorScheme.primary)
+                }
+                TextButton(onClick = { onEdit(note) }) { Text("Edit") }
+            }
         )
         LazyColumn(
             contentPadding = PaddingValues(20.dp),
@@ -509,6 +518,8 @@ private fun DetailPage(
             item {
                 Text(note.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text(formatDate(note.updatedAt), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (note.category.isNotBlank()) Text(note.category.uppercase(Locale.getDefault()), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
+                if (note.summary.isNotBlank() && note.summary != note.content) Text(note.summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
             }
             note.imageUri?.let { path ->
                 item {
