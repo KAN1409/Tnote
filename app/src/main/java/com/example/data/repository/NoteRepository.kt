@@ -15,6 +15,8 @@ class NoteRepository(private val noteDao: NoteDao) {
 
     fun getNoteById(id: Long): Flow<NoteEntity?> = noteDao.getNoteById(id)
 
+    fun getFollowUps(): Flow<List<NoteEntity>> = noteDao.getFollowUps()
+
     suspend fun insertNote(note: NoteEntity): Long = noteDao.insertNote(note)
 
     suspend fun updateNote(note: NoteEntity) = noteDao.updateNote(note)
@@ -25,5 +27,13 @@ class NoteRepository(private val noteDao: NoteDao) {
 
     suspend fun togglePin(id: Long, currentPinState: Boolean) {
         noteDao.updatePinStatus(id, !currentPinState)
+    }
+
+    suspend fun setFollowUp(id: Long, followUpAt: Long?) {
+        noteDao.updateFollowUp(id, followUpAt, false)
+    }
+
+    suspend fun toggleFollowUpDone(note: NoteEntity) {
+        noteDao.updateFollowUp(note.id, note.followUpAt, !note.isFollowUpDone)
     }
 }

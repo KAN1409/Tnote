@@ -16,6 +16,8 @@ data class NoteEntity(
     val durationSeconds: Int = 0,
     val imageUri: String? = null,
     val isPinned: Boolean = false,
+    val followUpAt: Long? = null,
+    val isFollowUpDone: Boolean = false,
     val tags: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

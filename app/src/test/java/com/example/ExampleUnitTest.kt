@@ -10,7 +10,7 @@ import org.junit.Test
  */
 class ExampleUnitTest {
   @Test
-  fun addition_isCorrect() {
-    assertEquals(4, 2 + 2)
+  fun followUpDelay_isOneDay() {
+    assertEquals(86_400_000L, 24 * 60 * 60 * 1000L)
   }
 }

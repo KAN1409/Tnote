@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
 import com.example.data.model.NoteEntity
 import com.example.data.model.NoteType
+import com.example.service.models.ModelManager
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -17,7 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [35])
 class ExampleRobolectricTest {
 
   private lateinit var database: AppDatabase
@@ -39,7 +40,7 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("Voice Notes", appName)
+    assertEquals("Tnote", appName)
   }
 
   @Test
@@ -56,5 +57,30 @@ class ExampleRobolectricTest {
     assertEquals("Voice Memo 1", notes[0].title)
     assertEquals(NoteType.VOICE, notes[0].type)
   }
-}
 
+  @Test
+  fun `follow up is persisted and can be completed`() = runBlocking {
+    val id = database.noteDao().insertNote(NoteEntity(title = "Call supplier"))
+    val tomorrow = System.currentTimeMillis() + 86_400_000L
+    database.noteDao().updateFollowUp(id, tomorrow, false)
+    val pending = database.noteDao().getFollowUps().first().single()
+    assertEquals(tomorrow, pending.followUpAt)
+    database.noteDao().updateFollowUp(id, tomorrow, true)
+    assertEquals(true, database.noteDao().getFollowUps().first().single().isFollowUpDone)
+  }
+
+  @Test
+  fun `model manager exposes embedded fallbacks and rejects missing downloads`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    context.getSharedPreferences("offline_models", Context.MODE_PRIVATE).edit().clear().commit()
+    context.filesDir.resolve("downloaded_models").deleteRecursively()
+    val manager = ModelManager(context)
+
+    assertEquals(ModelManager.VOICE_TINY, manager.state.value.activeVoiceId)
+    assertEquals(ModelManager.OCR_FAST, manager.state.value.activeOcrId)
+    assertEquals(true, ModelManager.VOICE_TINY in manager.state.value.installedIds)
+    assertEquals(true, ModelManager.OCR_FAST in manager.state.value.installedIds)
+    assertEquals(true, manager.activate(ModelManager.VOICE_BASE).isFailure)
+    assertEquals(true, manager.activate(ModelManager.OCR_BEST).isFailure)
+  }
+}

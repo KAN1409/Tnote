@@ -201,6 +201,7 @@ fun AudioRecordBottomSheet(
                             onStartRecording()
                         }
                     },
+                    enabled = !speechState.isTranscribing,
                     modifier = Modifier
                         .size(80.dp)
                         .clip(CircleShape)
@@ -219,7 +220,11 @@ fun AudioRecordBottomSheet(
             // Duration & Status Indicator
             val durationText = formatDuration(speechState.durationSeconds)
             Text(
-                text = if (speechState.isRecording) durationText else "Ready to Record",
+                text = when {
+                    speechState.isTranscribing -> "Transcribing offline…"
+                    speechState.isRecording -> durationText
+                    else -> "Ready to Record"
+                },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = if (speechState.isRecording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
@@ -228,8 +233,9 @@ fun AudioRecordBottomSheet(
             Text(
                 text = when {
                     !hasAudioPermission -> "Microphone permission required. Tap the mic icon to grant permission."
-                    speechState.isRecording -> "Listening... Speak clearly into the microphone."
-                    else -> "Tap the microphone to begin voice transcription."
+                    speechState.isTranscribing -> "Whisper Base is processing the saved recording on this device."
+                    speechState.isRecording -> "Recording locally. Tap stop when you finish."
+                    else -> "Tap the microphone to begin an offline voice note."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -262,7 +268,7 @@ fun AudioRecordBottomSheet(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "Live Transcription:",
+                            text = "Offline Transcription:",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -289,7 +295,11 @@ fun AudioRecordBottomSheet(
                         )
                     } else {
                         Text(
-                            text = if (speechState.isRecording) "Listening for speech..." else "Transcribed text will appear here in real-time as you speak.",
+                            text = when {
+                                speechState.isTranscribing -> "Processing audio without sending it off the device…"
+                                speechState.isRecording -> "The transcript will be created after you stop recording."
+                                else -> "Your Whisper transcript will appear here."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline
                         )
@@ -319,6 +329,7 @@ fun AudioRecordBottomSheet(
                         onCancel()
                         onDismiss()
                     },
+                    enabled = !speechState.isTranscribing,
                     modifier = Modifier
                         .weight(1f)
                         .testTag("cancel_voice_record_button")
@@ -330,7 +341,7 @@ fun AudioRecordBottomSheet(
                     onClick = {
                         onStopAndSave(title)
                     },
-                    enabled = speechState.transcribedText.isNotBlank() || speechState.partialText.isNotBlank() || speechState.isRecording,
+                    enabled = !speechState.isTranscribing && speechState.isRecording,
                     modifier = Modifier
                         .weight(1f)
                         .testTag("save_voice_note_button"),

@@ -1,17 +1,17 @@
 package com.example.service.speech
 
 import android.content.Context
-import android.content.Intent
+import android.media.AudioFormat
+import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
-import android.os.Build
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import com.example.service.models.ModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,11 +20,13 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
-import java.util.Locale
+import java.io.RandomAccessFile
+import kotlin.math.sqrt
 
 data class SpeechState(
     val isRecording: Boolean = false,
     val isListening: Boolean = false,
+    val isTranscribing: Boolean = false,
     val transcribedText: String = "",
     val partialText: String = "",
     val rmsLevel: Float = 0f,
@@ -40,256 +42,177 @@ data class PlayerState(
     val totalDurationMs: Int = 0
 )
 
-class SpeechManager(private val context: Context) {
-
-    private var speechRecognizer: SpeechRecognizer? = null
-    private var mediaRecorder: MediaRecorder? = null
+/** Records clean 16 kHz PCM and runs Whisper after capture, avoiding microphone contention. */
+class SpeechManager(
+    private val context: Context,
+    modelManager: ModelManager
+) {
+    private val sampleRate = 16_000
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val transcriber = OfflineTranscriber(context, modelManager)
+    private var recorder: AudioRecord? = null
+    private var recordingJob: Job? = null
+    private var outputFile: File? = null
     private var mediaPlayer: MediaPlayer? = null
+    private var playerTimerJob: Job? = null
 
     private val _speechState = MutableStateFlow(SpeechState())
     val speechState: StateFlow<SpeechState> = _speechState.asStateFlow()
-
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
 
-    private var timerJob: Job? = null
-    private var playerTimerJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Main)
-    private var currentOutputFile: File? = null
+    fun isSpeechRecognitionAvailable(): Boolean = true
 
-    fun isSpeechRecognitionAvailable(): Boolean {
-        return SpeechRecognizer.isRecognitionAvailable(context)
+    fun reloadTranscriptionModel() {
+        transcriber.close()
     }
 
-    fun startListeningAndRecording(language: String = Locale.getDefault().toLanguageTag()) {
+    @Suppress("MissingPermission")
+    fun startListeningAndRecording(language: String = "ar") {
+        if (_speechState.value.isRecording || _speechState.value.isTranscribing) return
         stopPlayback()
-        _speechState.value = SpeechState(
-            isRecording = true,
-            isListening = true,
-            transcribedText = "",
-            partialText = "",
-            rmsLevel = 0f,
-            durationSeconds = 0,
-            errorMessage = null
+        val minBuffer = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
         )
-
-        // 1. Prepare Audio File & MediaRecorder
-        try {
-            val audioDir = File(context.filesDir, "audio_notes").apply { mkdirs() }
-            val audioFile = File(audioDir, "voice_${System.currentTimeMillis()}.m4a")
-            currentOutputFile = audioFile
-
-            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(context)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(128000)
-                setAudioSamplingRate(44100)
-                setOutputFile(audioFile.absolutePath)
-                prepare()
-                start()
-            }
-        } catch (e: Exception) {
-            // If MediaRecorder fails (e.g. concurrent MIC capture or device limitation), continue with SpeechRecognizer
-            currentOutputFile = null
+        if (minBuffer <= 0) {
+            _speechState.value = SpeechState(errorMessage = "This device could not initialize audio recording.")
+            return
         }
-
-        // 2. Start Duration Timer
-        timerJob?.cancel()
-        timerJob = scope.launch {
-            var seconds = 0
-            while (isActive && _speechState.value.isRecording) {
-                delay(1000)
-                seconds++
-                _speechState.value = _speechState.value.copy(durationSeconds = seconds)
-            }
-        }
-
-        // 3. Start SpeechRecognizer
-        try {
-            speechRecognizer?.destroy()
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
-                setRecognitionListener(object : RecognitionListener {
-                    override fun onReadyForSpeech(params: Bundle?) {
-                        _speechState.value = _speechState.value.copy(isListening = true)
-                    }
-
-                    override fun onBeginningOfSpeech() {}
-
-                    override fun onRmsChanged(rmsdB: Float) {
-                        _speechState.value = _speechState.value.copy(
-                            rmsLevel = (rmsdB.coerceIn(0f, 10f) / 10f)
-                        )
-                    }
-
-                    override fun onBufferReceived(buffer: ByteArray?) {}
-
-                    override fun onEndOfSpeech() {}
-
-                    override fun onError(error: Int) {
-                        val message = when (error) {
-                            SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
-                            SpeechRecognizer.ERROR_CLIENT -> "Client side error"
-                            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission required"
-                            SpeechRecognizer.ERROR_NETWORK -> "Network connection required for online speech recognition"
-                            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-                            SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected. Please speak clearly."
-                            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech service is busy"
-                            SpeechRecognizer.ERROR_SERVER -> "Recognition server error"
-                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
-                            else -> "Speech recognition error ($error)"
-                        }
-                        // Only set error message if we have not recorded any text
-                        if (_speechState.value.transcribedText.isBlank() && _speechState.value.partialText.isBlank()) {
-                            _speechState.value = _speechState.value.copy(
-                                errorMessage = message,
-                                isListening = false
-                            )
-                        } else {
-                            _speechState.value = _speechState.value.copy(isListening = false)
-                        }
-                    }
-
-                    override fun onResults(results: Bundle?) {
-                        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        val text = matches?.firstOrNull() ?: ""
-                        val currentText = _speechState.value.transcribedText
-                        val combined = if (currentText.isBlank()) text else "$currentText $text"
-                        _speechState.value = _speechState.value.copy(
-                            transcribedText = combined.trim(),
-                            partialText = "",
-                            isListening = false
-                        )
-                    }
-
-                    override fun onPartialResults(partialResults: Bundle?) {
-                        val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        val partial = matches?.firstOrNull() ?: ""
-                        if (partial.isNotBlank()) {
-                            _speechState.value = _speechState.value.copy(partialText = partial)
-                        }
-                    }
-
-                    override fun onEvent(eventType: Int, params: Bundle?) {}
-                })
-            }
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            }
-            speechRecognizer?.startListening(intent)
-        } catch (e: Exception) {
-            _speechState.value = _speechState.value.copy(
-                errorMessage = "Failed to start speech recognizer: ${e.localizedMessage}",
-                isListening = false
+        val file = File(File(context.filesDir, "audio_notes").apply { mkdirs() }, "voice_${System.currentTimeMillis()}.wav")
+        val audioRecord = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBuffer * 2
             )
+        } catch (error: Exception) {
+            _speechState.value = SpeechState(errorMessage = error.localizedMessage ?: "Microphone could not be opened.")
+            return
+        }
+        if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
+            audioRecord.release()
+            _speechState.value = SpeechState(errorMessage = "Microphone could not be initialized.")
+            return
+        }
+        recorder = audioRecord
+        outputFile = file
+        _speechState.value = SpeechState(isRecording = true, partialText = "Recording locally…")
+        audioRecord.startRecording()
+        recordingJob = scope.launch(Dispatchers.IO) { recordToWave(audioRecord, file, minBuffer * 2) }
+    }
+
+    suspend fun stopListeningAndRecording(): SpeechState {
+        if (!_speechState.value.isRecording) return _speechState.value
+        val file = outputFile
+        recorder?.let { runCatching { it.stop() } }
+        recordingJob?.join()
+        recorder?.release()
+        recorder = null
+        recordingJob = null
+        if (file == null || !file.exists() || file.length() <= 44) {
+            return SpeechState(errorMessage = "No usable audio was recorded.").also { _speechState.value = it }
+        }
+        _speechState.value = _speechState.value.copy(
+            isRecording = false,
+            isTranscribing = true,
+            partialText = "Whisper Base is transcribing offline…",
+            recordedAudioPath = file.absolutePath
+        )
+        val result = transcriber.transcribe(file.absolutePath)
+        return result.fold(
+            onSuccess = { text ->
+                _speechState.value.copy(
+                    isTranscribing = false,
+                    transcribedText = text,
+                    partialText = "",
+                    errorMessage = null
+                )
+            },
+            onFailure = { error ->
+                _speechState.value.copy(
+                    isTranscribing = false,
+                    partialText = "",
+                    errorMessage = error.localizedMessage ?: "Offline transcription failed."
+                )
+            }
+        ).also { _speechState.value = it }
+    }
+
+    suspend fun transcribeFile(path: String): Result<String> = transcriber.transcribe(path)
+
+    private suspend fun recordToWave(audioRecord: AudioRecord, file: File, bufferBytes: Int) {
+        val samples = ShortArray((bufferBytes / 2).coerceAtLeast(1024))
+        var totalSamples = 0L
+        RandomAccessFile(file, "rw").use { wav ->
+            wav.setLength(0)
+            wav.write(ByteArray(44))
+            while (currentCoroutineContext().isActive && audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                val count = audioRecord.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
+                if (count <= 0) continue
+                var squareSum = 0.0
+                for (index in 0 until count) {
+                    val value = samples[index].toInt()
+                    wav.write(value and 0xff)
+                    wav.write((value shr 8) and 0xff)
+                    squareSum += value.toDouble() * value
+                }
+                totalSamples += count
+                val rms = (sqrt(squareSum / count) / Short.MAX_VALUE).toFloat().coerceIn(0f, 1f)
+                _speechState.value = _speechState.value.copy(
+                    rmsLevel = rms,
+                    durationSeconds = (totalSamples / sampleRate).toInt()
+                )
+            }
+            writeWaveHeader(wav, totalSamples * 2)
         }
     }
 
-    fun stopListeningAndRecording(): SpeechState {
-        timerJob?.cancel()
-
-        try {
-            speechRecognizer?.stopListening()
-        } catch (e: Exception) {
-            // Ignore
+    private fun writeWaveHeader(file: RandomAccessFile, audioBytes: Long) {
+        file.seek(0)
+        fun ascii(value: String) = file.write(value.toByteArray(Charsets.US_ASCII))
+        fun littleInt(value: Long) {
+            repeat(4) { file.write(((value shr (8 * it)) and 0xff).toInt()) }
         }
-
-        try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
-        } catch (e: Exception) {
-            // If stopped prematurely
+        fun littleShort(value: Int) {
+            file.write(value and 0xff)
+            file.write((value shr 8) and 0xff)
         }
-        mediaRecorder = null
-
-        val finalTranscribed = if (_speechState.value.transcribedText.isNotBlank()) {
-            if (_speechState.value.partialText.isNotBlank() && !_speechState.value.transcribedText.contains(_speechState.value.partialText)) {
-                "${_speechState.value.transcribedText} ${_speechState.value.partialText}".trim()
-            } else {
-                _speechState.value.transcribedText
-            }
-        } else {
-            _speechState.value.partialText
-        }
-
-        val resultState = _speechState.value.copy(
-            isRecording = false,
-            isListening = false,
-            transcribedText = finalTranscribed,
-            partialText = "",
-            recordedAudioPath = currentOutputFile?.takeIf { it.exists() && it.length() > 0 }?.absolutePath
-        )
-        _speechState.value = resultState
-        return resultState
+        ascii("RIFF"); littleInt(audioBytes + 36); ascii("WAVE")
+        ascii("fmt "); littleInt(16); littleShort(1); littleShort(1)
+        littleInt(sampleRate.toLong()); littleInt((sampleRate * 2).toLong())
+        littleShort(2); littleShort(16); ascii("data"); littleInt(audioBytes)
     }
 
     fun cancelListeningAndRecording() {
-        timerJob?.cancel()
-        try {
-            speechRecognizer?.cancel()
-            speechRecognizer?.destroy()
-        } catch (e: Exception) {}
-        speechRecognizer = null
-
-        try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
-        } catch (e: Exception) {}
-        mediaRecorder = null
-
-        currentOutputFile?.let { file ->
-            if (file.exists()) file.delete()
-        }
-        currentOutputFile = null
-
+        runCatching { recorder?.stop() }
+        recorder?.release()
+        recorder = null
+        recordingJob?.cancel()
+        recordingJob = null
+        outputFile?.delete()
+        outputFile = null
         _speechState.value = SpeechState()
     }
 
-    // Audio Playback
     fun playAudio(filePath: String) {
-        val file = File(filePath)
-        if (!file.exists()) return
-
-        if (_playerState.value.isPlaying && _playerState.value.currentPath == filePath) {
-            pausePlayback()
-            return
-        }
-
+        if (!File(filePath).exists()) return
+        if (_playerState.value.isPlaying && _playerState.value.currentPath == filePath) return pausePlayback()
+        if (!_playerState.value.isPlaying && _playerState.value.currentPath == filePath) return resumePlayback()
         stopPlayback()
-
         try {
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(filePath)
                 prepare()
                 start()
-                setOnCompletionListener {
-                    stopPlayback()
-                }
+                setOnCompletionListener { stopPlayback() }
             }
-
-            val duration = mediaPlayer?.duration ?: 0
-            _playerState.value = PlayerState(
-                isPlaying = true,
-                currentPath = filePath,
-                currentPositionMs = 0,
-                totalDurationMs = duration
-            )
-
+            _playerState.value = PlayerState(true, filePath, 0, mediaPlayer?.duration ?: 0)
             startPlayerProgressTimer()
-        } catch (e: IOException) {
+        } catch (_: IOException) {
             stopPlayback()
         }
     }
@@ -298,11 +221,9 @@ class SpeechManager(private val context: Context) {
         playerTimerJob?.cancel()
         playerTimerJob = scope.launch {
             while (isActive && mediaPlayer?.isPlaying == true) {
-                val current = mediaPlayer?.currentPosition ?: 0
-                val total = mediaPlayer?.duration ?: 0
                 _playerState.value = _playerState.value.copy(
-                    currentPositionMs = current,
-                    totalDurationMs = total
+                    currentPositionMs = mediaPlayer?.currentPosition ?: 0,
+                    totalDurationMs = mediaPlayer?.duration ?: 0
                 )
                 delay(200)
             }
@@ -310,32 +231,19 @@ class SpeechManager(private val context: Context) {
     }
 
     fun pausePlayback() {
-        mediaPlayer?.let {
-            if (it.isPlaying) {
-                it.pause()
-                _playerState.value = _playerState.value.copy(isPlaying = false)
-            }
-        }
+        mediaPlayer?.takeIf { it.isPlaying }?.pause()
+        _playerState.value = _playerState.value.copy(isPlaying = false)
     }
 
     fun resumePlayback() {
-        mediaPlayer?.let {
-            if (!it.isPlaying) {
-                it.start()
-                _playerState.value = _playerState.value.copy(isPlaying = true)
-                startPlayerProgressTimer()
-            }
-        }
+        mediaPlayer?.takeIf { !it.isPlaying }?.start()
+        _playerState.value = _playerState.value.copy(isPlaying = true)
+        startPlayerProgressTimer()
     }
 
     fun stopPlayback() {
         playerTimerJob?.cancel()
-        try {
-            mediaPlayer?.apply {
-                if (isPlaying) stop()
-                release()
-            }
-        } catch (e: Exception) {}
+        runCatching { mediaPlayer?.release() }
         mediaPlayer = null
         _playerState.value = PlayerState()
     }
@@ -343,5 +251,7 @@ class SpeechManager(private val context: Context) {
     fun release() {
         cancelListeningAndRecording()
         stopPlayback()
+        transcriber.close()
+        scope.cancel()
     }
 }

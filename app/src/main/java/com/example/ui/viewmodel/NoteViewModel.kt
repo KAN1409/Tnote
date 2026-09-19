@@ -11,10 +11,12 @@ import com.example.data.model.NoteType
 import com.example.data.repository.NoteRepository
 import com.example.service.ocr.OcrManager
 import com.example.service.ocr.OcrResult
+import com.example.service.models.ModelManager
 import com.example.service.speech.PlayerState
 import com.example.service.speech.SpeechManager
 import com.example.service.speech.SpeechState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -43,13 +45,28 @@ data class UiFeedback(
 class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: NoteRepository
-    val speechManager = SpeechManager(application.applicationContext)
-    val ocrManager = OcrManager(application.applicationContext)
+    val modelManager = ModelManager(application.applicationContext)
+    val modelState = modelManager.state
+    val speechManager = SpeechManager(application.applicationContext, modelManager)
+    val ocrManager = OcrManager(application.applicationContext, modelManager)
+    private val modelDownloadJobs = mutableMapOf<String, Job>()
 
     init {
         val database = AppDatabase.getDatabase(application.applicationContext)
         repository = NoteRepository(database.noteDao())
     }
+
+    val allNotes: StateFlow<List<NoteEntity>> = repository.getAllNotes().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val followUps: StateFlow<List<NoteEntity>> = repository.getFollowUps().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
 
     // Navigation & Search State
     private val _selectedTab = MutableStateFlow(NavigationTab.ALL)
@@ -143,21 +160,25 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopVoiceRecordingAndSave(title: String) {
-        val result = speechManager.stopListeningAndRecording()
-        val text = result.transcribedText.ifBlank { "Voice recording transcription" }
-        val noteTitle = title.ifBlank { "Voice Note - ${java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}" }
-
         viewModelScope.launch {
+            val result = speechManager.stopListeningAndRecording()
+            val audioPath = result.recordedAudioPath
+            if (audioPath.isNullOrBlank()) {
+                emitFeedback(result.errorMessage ?: "Voice recording could not be saved", isError = true)
+                return@launch
+            }
+            val noteTitle = title.ifBlank { "Voice Note - ${java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}" }
             val note = NoteEntity(
                 type = NoteType.VOICE,
                 title = noteTitle,
-                content = text,
-                audioFilePath = result.recordedAudioPath,
+                content = result.transcribedText,
+                audioFilePath = audioPath,
                 durationSeconds = result.durationSeconds
             )
             repository.insertNote(note)
             _isRecordingSheetVisible.value = false
-            emitFeedback("Voice note saved successfully")
+            if (result.errorMessage == null) emitFeedback("Voice note transcribed offline")
+            else emitFeedback("Audio saved, but transcription failed: ${result.errorMessage}", isError = true)
         }
     }
 
@@ -313,6 +334,72 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             repository.deleteNote(note)
             emitFeedback("Note deleted")
         }
+    }
+
+    fun setFollowUp(note: NoteEntity, followUpAt: Long?) {
+        viewModelScope.launch {
+            repository.setFollowUp(note.id, followUpAt)
+            emitFeedback(if (followUpAt == null) "Follow-up removed" else "Follow-up scheduled")
+        }
+    }
+
+    fun toggleFollowUpDone(note: NoteEntity) {
+        viewModelScope.launch {
+            repository.toggleFollowUpDone(note)
+            emitFeedback(if (note.isFollowUpDone) "Follow-up reopened" else "Follow-up completed")
+        }
+    }
+
+    fun retranscribe(note: NoteEntity) {
+        val path = note.audioFilePath ?: return
+        viewModelScope.launch {
+            emitFeedback("Transcribing with ${modelManager.activeVoiceName()}…")
+            speechManager.transcribeFile(path).fold(
+                onSuccess = { transcript ->
+                    repository.updateNote(note.copy(content = transcript, updatedAt = System.currentTimeMillis()))
+                    emitFeedback("Transcription updated")
+                },
+                onFailure = { emitFeedback(it.localizedMessage ?: "Transcription failed", isError = true) }
+            )
+        }
+    }
+
+    fun downloadModel(modelId: String) {
+        if (modelDownloadJobs[modelId]?.isActive == true) return
+        modelDownloadJobs[modelId] = viewModelScope.launch {
+            modelManager.download(modelId).fold(
+                onSuccess = { emitFeedback("Model downloaded and verified") },
+                onFailure = { emitFeedback(it.localizedMessage ?: "Model download failed", isError = true) }
+            )
+            modelDownloadJobs.remove(modelId)
+        }
+    }
+
+    fun cancelModelDownload(modelId: String) {
+        modelDownloadJobs.remove(modelId)?.cancel()
+        emitFeedback("Download paused. You can resume it later.")
+    }
+
+    fun activateModel(modelId: String) {
+        modelManager.activate(modelId).fold(
+            onSuccess = {
+                speechManager.reloadTranscriptionModel()
+                ocrManager.close()
+                emitFeedback("Model activated")
+            },
+            onFailure = { emitFeedback(it.localizedMessage ?: "Model could not be activated", isError = true) }
+        )
+    }
+
+    fun deleteModel(modelId: String) {
+        modelManager.delete(modelId).fold(
+            onSuccess = {
+                speechManager.reloadTranscriptionModel()
+                ocrManager.close()
+                emitFeedback("Downloaded model deleted")
+            },
+            onFailure = { emitFeedback(it.localizedMessage ?: "Model could not be deleted", isError = true) }
+        )
     }
 
     private fun emitFeedback(message: String, isError: Boolean = false) {
