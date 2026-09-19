@@ -5,6 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
+import com.paddle.ocr.EngineConfig
+import com.paddle.ocr.PaddleOCR
+import com.paddle.ocr.PaddleOCRConfig
+import com.paddle.ocr.model.OCRResult as PaddleLine
 import com.example.service.models.ModelManager
 import com.googlecode.tesseract.android.TessBaseAPI
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +38,7 @@ class OcrManager(
 
     private val mutex = Mutex()
     private var tessApi: TessBaseAPI? = null
+    private var paddleApi: PaddleOCR? = null
     private var loadedModelName: String? = null
 
     suspend fun recognizeTextFromUri(uri: Uri): OcrResult = withContext(Dispatchers.IO) {
@@ -52,16 +58,30 @@ class OcrManager(
         val prepared = prepareDarkVariant(scaled)
         val savedPath = saveBitmapToAppStorage(source)
         try {
-            val api = getOrCreateApi()
-            val candidates = listOf(
-                recognizeCandidate(api, scaled, TessBaseAPI.PageSegMode.PSM_AUTO),
-                recognizeCandidate(api, prepared, TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
-            )
-            val best = candidates.maxByOrNull { candidate ->
-                candidate.confidence * kotlin.math.sqrt(candidate.text.count(Char::isLetterOrDigit).coerceAtLeast(1).toDouble())
+            val paddleFiles = modelManager.activePaddleOcrFiles()
+            val best = if (paddleFiles != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val api = getOrCreatePaddleApi(
+                    paddleFiles.detector.absolutePath,
+                    paddleFiles.recognizer.absolutePath,
+                    paddleFiles.dictionary.absolutePath
+                )
+                val result = api.recognize(scaled)
+                val accepted = result.results.filter { it.confidence >= 0.35f && it.text.isNotBlank() }
+                Candidate(
+                    text = composePaddleText(accepted),
+                    confidence = if (accepted.isEmpty()) 0 else (accepted.map { it.confidence }.average() * 100).toInt()
+                )
+            } else {
+                val api = getOrCreateApi()
+                listOf(
+                    recognizeCandidate(api, scaled, TessBaseAPI.PageSegMode.PSM_AUTO),
+                    recognizeCandidate(api, prepared, TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
+                ).maxByOrNull { candidate ->
+                    candidate.confidence * kotlin.math.sqrt(candidate.text.count(Char::isLetterOrDigit).coerceAtLeast(1).toDouble())
+                } ?: Candidate("", 0)
             }
-            val text = best?.text.orEmpty().trim()
-            val confidence = best?.confidence ?: 0
+            val text = best.text.trim()
+            val confidence = best.confidence
             val usefulCharacters = text.count(Char::isLetterOrDigit)
             if (text.isBlank()) OcrResult(false, "", savedPath, "No readable Arabic or English text was found.")
             else if (confidence < MIN_ACCEPTED_CONFIDENCE || usefulCharacters < MIN_USEFUL_CHARACTERS) {
@@ -73,6 +93,47 @@ class OcrManager(
             if (prepared !== scaled) prepared.recycle()
             if (scaled !== source) scaled.recycle()
         }
+    }
+
+    private suspend fun getOrCreatePaddleApi(detector: String, recognizer: String, dictionary: String): PaddleOCR {
+        val selectedModel = modelManager.activeOcrName()
+        if (loadedModelName != selectedModel) close()
+        paddleApi?.let { return it }
+        return PaddleOCR.create(
+            context = context,
+            config = PaddleOCRConfig(detThresh = 0.3f, detBoxThresh = 0.55f, recScoreThresh = 0.30f, recBatchSize = 1),
+            engineConfig = EngineConfig(numThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)),
+            detModelAssetPath = detector,
+            recModelAssetPath = recognizer,
+            recConfigAssetPath = dictionary
+        ).also {
+            paddleApi = it
+            loadedModelName = selectedModel
+        }
+    }
+
+    private fun composePaddleText(lines: List<PaddleLine>): String {
+        if (lines.isEmpty()) return ""
+        val rowHeight = lines.map { line ->
+            val ys = line.box.points.map { it.y }
+            (ys.maxOrNull() ?: 0f) - (ys.minOrNull() ?: 0f)
+        }.filter { it > 0f }.average().takeIf { !it.isNaN() }?.toFloat() ?: 18f
+        val sorted = lines.sortedWith(compareBy<PaddleLine> { it.box.points.minOf { p -> p.y } }.thenBy { it.box.points.minOf { p -> p.x } })
+        val rows = mutableListOf<MutableList<PaddleLine>>()
+        sorted.forEach { line ->
+            val cy = line.box.points.map { it.y }.average().toFloat()
+            val row = rows.lastOrNull()
+            val rowCy = row?.lastOrNull()?.box?.points?.map { it.y }?.average()?.toFloat()
+            if (row == null || rowCy == null || kotlin.math.abs(cy - rowCy) > rowHeight * 0.65f) rows += mutableListOf(line)
+            else row += line
+        }
+        return rows.joinToString("\n") { row ->
+            val arabicChars = row.sumOf { it.text.count { ch -> ch.code in 0x0600..0x06FF } }
+            val latinChars = row.sumOf { it.text.count { ch -> ch in 'A'..'Z' || ch in 'a'..'z' } }
+            val ordered = if (arabicChars > latinChars) row.sortedByDescending { it.box.points.minOf { p -> p.x } }
+            else row.sortedBy { it.box.points.minOf { p -> p.x } }
+            ordered.joinToString(" ") { it.text.trim() }.trim()
+        }.trim()
     }
 
     private fun getOrCreateApi(): TessBaseAPI {
@@ -155,6 +216,8 @@ class OcrManager(
     fun close() {
         tessApi?.recycle()
         tessApi = null
+        paddleApi?.close()
+        paddleApi = null
         loadedModelName = null
     }
 }
