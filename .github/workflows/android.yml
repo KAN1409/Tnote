@@ -26,7 +26,8 @@ jobs:
       - name: Guard update identity
         run: |
           grep -q 'applicationId = "com.aistudio.voicenotes.vnapp"' app/build.gradle.kts
-          grep -q 'versionCode = 4' app/build.gradle.kts
+          grep -q 'versionCode = 5' app/build.gradle.kts
+          grep -q 'versionName = "2.3.0"' app/build.gradle.kts
           grep -q '@Database(entities = \[NoteEntity::class\], version = 3' app/src/main/java/com/example/data/local/AppDatabase.kt
           grep -q 'MIGRATION_2_3' app/src/main/java/com/example/data/local/AppDatabase.kt
           # Debug builds use the Android debug certificate. Release/update signing is gated separately
