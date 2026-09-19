@@ -175,7 +175,9 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 content = result.transcribedText,
                 audioFilePath = audioPath,
                 durationSeconds = result.durationSeconds,
-                tags = insight.tags
+                tags = insight.tags,
+                summary = insight.summary,
+                category = insight.category
             )
             repository.insertNote(note)
             _isRecordingSheetVisible.value = false
@@ -248,7 +250,9 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 title = noteTitle,
                 content = extractedText,
                 imageUri = imagePath,
-                tags = insight.tags
+                tags = insight.tags,
+                summary = insight.summary,
+                category = insight.category
             )
             repository.insertNote(note)
             _isOcrSheetVisible.value = false
@@ -366,6 +370,8 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                         title = if (shouldRefreshTitle) insight.title else note.title,
                         content = transcript,
                         tags = if (note.tags.isBlank()) insight.tags else note.tags,
+                        summary = insight.summary,
+                        category = insight.category,
                         updatedAt = System.currentTimeMillis()
                     ))
                     emitFeedback("Transcription updated")
