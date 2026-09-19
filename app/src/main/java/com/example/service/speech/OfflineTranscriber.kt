@@ -165,6 +165,8 @@ class OfflineTranscriber(
         return target
     }
 
+    fun activeModelName(): String = modelManager.activeVoiceName()
+
     fun close() {
         recognizer?.release()
         recognizer = null
